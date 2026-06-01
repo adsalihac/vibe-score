@@ -19,6 +19,13 @@ VibeScore analyzes repository structure, code patterns, documentation quality, t
 - Testing readiness confidence with framework detection
 - Risk assessment and final production-readiness verdict
 - Shareable report card with PNG export and social sharing
+- Repo comparison mode with side-by-side deltas
+- Explainable findings with evidence references
+- Rule packs (Startup, Enterprise, OSS) for weighted scoring
+- Historical scan trends and organization snapshots
+- CI-ready summary endpoint and scheduled scan workflow snippet
+- Export bundle with PDF + JSON downloads
+- Public badge for README or dashboard embedding
 
 ## Tech Stack
 
@@ -46,6 +53,8 @@ cp .env.example .env
 ```
 
 3. Update .env values, especially DATABASE_URL and optional GITHUB_TOKEN.
+
+   - DATABASE_URL is required for historical trends, organization snapshots, and badges.
 
 4. Generate Prisma client:
 

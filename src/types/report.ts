@@ -1,5 +1,7 @@
 export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
+export type RulePackId = "startup" | "enterprise" | "oss";
+
 export type RepoArchetype =
   | "Architect"
   | "Startup Chaos"
@@ -60,6 +62,27 @@ export interface Verdict {
   style: "Human + AI" | "Human-led" | "AI-accelerated";
 }
 
+export interface ExplainableEvidence {
+  label: string;
+  value: string;
+  path?: string;
+}
+
+export interface ExplainableFinding {
+  id: string;
+  category:
+    | "AI Assistance"
+    | "Documentation"
+    | "Maintainability"
+    | "Architecture"
+    | "Technical Debt"
+    | "Testing"
+    | "Risk";
+  title: string;
+  summary: string;
+  evidence: ExplainableEvidence[];
+}
+
 export interface InvestigationReport {
   caseId: string;
   repository: RepositoryIdentity;
@@ -74,9 +97,61 @@ export interface InvestigationReport {
   archetypeSummary: string[];
   verdict: Verdict;
   generatedAt: string;
+  rulePack: RulePackId;
+  explainableFindings: ExplainableFinding[];
 }
 
 export interface InvestigationApiResponse {
   logs: string[];
   report: InvestigationReport;
+  persistence?: {
+    enabled: boolean;
+    message?: string;
+  };
+}
+
+export interface HistoricalInvestigation {
+  caseId: string;
+  overallHealth: number;
+  riskLevel: RiskLevel;
+  verdictStyle: Verdict["style"];
+  generatedAt: string;
+  rulePack: RulePackId;
+}
+
+export interface OrganizationSummary {
+  owner: string;
+  totalRepos: number;
+  totalScans: number;
+  averageHealth: number;
+  riskBreakdown: Record<RiskLevel, number>;
+  latestScanAt: string | null;
+  topRepos: Array<{
+    repoFullName: string;
+    scans: number;
+    averageHealth: number;
+    lastScanAt: string;
+  }>;
+}
+
+export interface ComparisonDelta {
+  metric: string;
+  left: number;
+  right: number;
+  delta: number;
+  direction: "higher" | "lower" | "equal";
+}
+
+export interface ComparisonCallouts {
+  strongestRepo: string;
+  mostRiskyRepo: string;
+  healthLead: number;
+  riskGap: number;
+}
+
+export interface ComparisonReport {
+  left: InvestigationReport;
+  right: InvestigationReport;
+  deltas: ComparisonDelta[];
+  callouts: ComparisonCallouts;
 }

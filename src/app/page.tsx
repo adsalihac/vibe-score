@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toPng } from "html-to-image";
+import { jsPDF } from "jspdf";
+import Image from "next/image";
 import {
   AlertTriangle,
   Binary,
@@ -19,7 +21,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Panel } from "@/components/ui/panel";
-import { type InvestigationApiResponse, type InvestigationReport } from "@/types/report";
+import { RULE_PACKS } from "@/lib/rule-packs";
+import {
+  type ComparisonReport,
+  type HistoricalInvestigation,
+  type InvestigationApiResponse,
+  type InvestigationReport,
+  type OrganizationSummary,
+  type RulePackId,
+} from "@/types/report";
 
 const INVESTIGATION_LOGS = [
   "[✓] Accessing repository",
@@ -56,13 +66,22 @@ function scoreTint(value: number) {
 
 export default function Home() {
   const [repoUrl, setRepoUrl] = useState("");
+  const [compareRepoUrl, setCompareRepoUrl] = useState("");
+  const [mode, setMode] = useState<"single" | "compare">("single");
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<InvestigationReport | null>(null);
+  const [comparison, setComparison] = useState<ComparisonReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [typingLine, setTypingLine] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [starCount, setStarCount] = useState<number | null>(null);
+  const [rulePack, setRulePack] = useState<RulePackId>("startup");
+  const [history, setHistory] = useState<HistoricalInvestigation[]>([]);
+  const [orgSummary, setOrgSummary] = useState<OrganizationSummary | null>(null);
+  const [persistenceNote, setPersistenceNote] = useState<string | null>(null);
+  const [schedule, setSchedule] = useState<"daily" | "weekly" | "monthly">("weekly");
   const reportCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -91,9 +110,24 @@ export default function Home() {
   }, []);
 
   const topShareLine = useMemo(() => {
-    if (!report) return "";
-    return `${report.repository.fullName} | Health ${report.verdict.overallHealth} | ${report.verdict.style}`;
-  }, [report]);
+    if (report) {
+      return `${report.repository.fullName} | Health ${report.verdict.overallHealth} | ${report.verdict.style}`;
+    }
+    if (comparison) {
+      const lead = Math.abs(comparison.left.verdict.overallHealth - comparison.right.verdict.overallHealth);
+      return `Compare ${comparison.left.repository.fullName} vs ${comparison.right.repository.fullName} | Health Δ ${lead}`;
+    }
+    return "";
+  }, [comparison, report]);
+
+  const activeRulePack = useMemo(() => {
+    return RULE_PACKS.find((pack) => pack.id === rulePack) ?? RULE_PACKS[0];
+  }, [rulePack]);
+
+  const negativeComparisonMetrics = useMemo(
+    () => new Set(["Technical Debt", "Risk Tier"]),
+    [],
+  );
 
   const runLogAnimation = () => {
     setLogs([]);
@@ -128,6 +162,32 @@ export default function Home() {
     };
   };
 
+  const fetchHistory = useCallback(async (fullName: string) => {
+    try {
+      const response = await fetch(`/api/history?repo=${encodeURIComponent(fullName)}`);
+      const data = (await response.json()) as { items: HistoricalInvestigation[] };
+      if (!response.ok) {
+        return;
+      }
+      setHistory(data.items ?? []);
+    } catch {
+      setHistory([]);
+    }
+  }, []);
+
+  const fetchOrgSummary = useCallback(async (owner: string) => {
+    try {
+      const response = await fetch(`/api/org-summary?owner=${encodeURIComponent(owner)}`);
+      const data = (await response.json()) as OrganizationSummary;
+      if (!response.ok) {
+        return;
+      }
+      setOrgSummary(data);
+    } catch {
+      setOrgSummary(null);
+    }
+  }, []);
+
   const handleInvestigation = async () => {
     if (!repoUrl.trim()) {
       setError("Please enter a GitHub repository URL.");
@@ -136,6 +196,10 @@ export default function Home() {
 
     setError(null);
     setReport(null);
+    setComparison(null);
+    setHistory([]);
+    setOrgSummary(null);
+    setPersistenceNote(null);
     setPhase("investigating");
     setIsSubmitting(true);
 
@@ -146,7 +210,7 @@ export default function Home() {
       const response = await fetch("/api/investigate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoUrl }),
+        body: JSON.stringify({ repoUrl, rulePack }),
       });
 
       const data = (await response.json()) as InvestigationApiResponse | { error: string };
@@ -162,10 +226,72 @@ export default function Home() {
 
       setLogs(data.logs);
       setReport(data.report);
+      void fetchHistory(data.report.repository.fullName);
+      void fetchOrgSummary(data.report.repository.owner);
+      setComparison(null);
+      setPersistenceNote(
+        data.persistence?.enabled === false
+          ? data.persistence.message ?? "History persistence is currently unavailable."
+          : null,
+      );
       setPhase("report");
     } catch (err) {
       setPhase("idle");
       setError(err instanceof Error ? err.message : "Investigation failed.");
+    } finally {
+      setIsSubmitting(false);
+      if (stopLogAnimation) {
+        stopLogAnimation();
+      }
+    }
+  };
+
+  const handleComparison = async () => {
+    if (!repoUrl.trim() || !compareRepoUrl.trim()) {
+      setError("Please enter two GitHub repository URLs.");
+      return;
+    }
+
+    setError(null);
+    setReport(null);
+    setComparison(null);
+    setHistory([]);
+    setOrgSummary(null);
+    setPersistenceNote(null);
+    setPhase("investigating");
+    setIsSubmitting(true);
+
+    const stopLogAnimation = runLogAnimation();
+    const start = Date.now();
+
+    try {
+      const response = await fetch("/api/compare", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leftRepoUrl: repoUrl,
+          rightRepoUrl: compareRepoUrl,
+          rulePack,
+        }),
+      });
+
+      const data = (await response.json()) as ComparisonReport | { error: string };
+
+      if (!response.ok || "error" in data) {
+        throw new Error("error" in data ? data.error : "Comparison failed.");
+      }
+
+      const elapsed = Date.now() - start;
+      if (elapsed < 5200) {
+        await new Promise((resolve) => setTimeout(resolve, 5200 - elapsed));
+      }
+
+      setLogs(INVESTIGATION_LOGS);
+      setComparison(data);
+      setPhase("report");
+    } catch (err) {
+      setPhase("idle");
+      setError(err instanceof Error ? err.message : "Comparison failed.");
     } finally {
       setIsSubmitting(false);
       if (stopLogAnimation) {
@@ -189,13 +315,67 @@ export default function Home() {
     link.click();
   };
 
+  const downloadReportJson = () => {
+    if (!report) return;
+    const blob = new Blob([JSON.stringify(report, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `vibescore-${report.repository.owner}-${report.repository.name}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadComparisonJson = () => {
+    if (!comparison) return;
+    const blob = new Blob([JSON.stringify(comparison, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `vibescore-compare-${comparison.left.repository.owner}-${comparison.right.repository.owner}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadReportPdf = async () => {
+    if (!reportCardRef.current || !report) return;
+    setIsExportingPdf(true);
+
+    try {
+      const dataUrl = await toPng(reportCardRef.current, {
+        cacheBust: true,
+        pixelRatio: 2,
+        backgroundColor: "#050505",
+      });
+
+      const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+      const img = pdf.getImageProperties(dataUrl);
+      const pageWidth = pdf.internal.pageSize.getWidth() - 48;
+      const pageHeight = pdf.internal.pageSize.getHeight() - 48;
+      const ratio = Math.min(pageWidth / img.width, pageHeight / img.height);
+      const renderWidth = img.width * ratio;
+      const renderHeight = img.height * ratio;
+      const offsetX = (pdf.internal.pageSize.getWidth() - renderWidth) / 2;
+      const offsetY = (pdf.internal.pageSize.getHeight() - renderHeight) / 2;
+
+      pdf.addImage(dataUrl, "PNG", offsetX, offsetY, renderWidth, renderHeight);
+      pdf.save(`vibescore-${report.repository.owner}-${report.repository.name}.pdf`);
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   const copyPublicLink = async () => {
     const url = window.location.origin;
     await navigator.clipboard.writeText(url);
   };
 
   const shareOnX = () => {
-    if (!report) return;
+    if (!report && !comparison) return;
     const text = encodeURIComponent(`VibeScore Investigation: ${topShareLine}`);
     const url = encodeURIComponent(window.location.origin);
     window.open(`https://x.com/intent/tweet?text=${text}&url=${url}`, "_blank");
@@ -227,20 +407,83 @@ export default function Home() {
             Paste a GitHub repository URL and receive a complete forensic investigation report covering AI-assisted development patterns, maintainability, documentation quality, technical debt, architecture health, and production readiness.
           </p>
 
-          <div className="mt-8 flex flex-col gap-3 md:flex-row">
-            <Input
-              value={repoUrl}
-              onChange={(event) => setRepoUrl(event.target.value)}
-              placeholder="github.com/user/repository"
-              className="text-sm md:text-base"
-            />
+          <div className="mt-6 flex flex-wrap gap-2">
             <Button
-              onClick={handleInvestigation}
+              size="sm"
+              variant={mode === "single" ? "primary" : "outline"}
+              onClick={() => setMode("single")}
               disabled={isSubmitting}
-              className="h-14 min-w-56"
             >
-              OPEN INVESTIGATION
+              Single Repo
             </Button>
+            <Button
+              size="sm"
+              variant={mode === "compare" ? "primary" : "outline"}
+              onClick={() => setMode("compare")}
+              disabled={isSubmitting}
+            >
+              Compare Repos
+            </Button>
+          </div>
+
+          <div className="mt-6 grid gap-3 md:grid-cols-[1.2fr_1fr]">
+            <div className="rounded-md border border-[var(--border)] bg-black/20 p-4">
+              <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
+                Rule Pack
+              </p>
+              <select
+                className="mt-2 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-[var(--foreground)]"
+                value={rulePack}
+                onChange={(event) => setRulePack(event.target.value as RulePackId)}
+              >
+                {RULE_PACKS.map((pack) => (
+                  <option key={pack.id} value={pack.id}>
+                    {pack.label}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-2 text-xs text-[var(--muted)]">{activeRulePack.description}</p>
+            </div>
+            <div className="rounded-md border border-[var(--border)] bg-black/20 p-4">
+              <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
+                Focus
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2 text-xs text-[var(--foreground)]">
+                {activeRulePack.emphasis.map((item) => (
+                  <span key={item} className="rounded-md border border-[var(--border)] px-2 py-1">
+                    {item}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-6 flex flex-col gap-3">
+            <div className={`grid gap-3 ${mode === "compare" ? "md:grid-cols-2" : ""}`}>
+              <Input
+                value={repoUrl}
+                onChange={(event) => setRepoUrl(event.target.value)}
+                placeholder="github.com/user/repository"
+                className="text-sm md:text-base"
+              />
+              {mode === "compare" ? (
+                <Input
+                  value={compareRepoUrl}
+                  onChange={(event) => setCompareRepoUrl(event.target.value)}
+                  placeholder="github.com/user/another-repo"
+                  className="text-sm md:text-base"
+                />
+              ) : null}
+            </div>
+            <div className="flex flex-col gap-3 md:flex-row">
+              <Button
+                onClick={mode === "compare" ? handleComparison : handleInvestigation}
+                disabled={isSubmitting}
+                className="h-14 min-w-56"
+              >
+                {mode === "compare" ? "COMPARE REPOS" : "OPEN INVESTIGATION"}
+              </Button>
+            </div>
           </div>
 
           {error ? (
@@ -299,14 +542,124 @@ export default function Home() {
           </motion.section>
         ) : null}
 
-        {phase === "report" && report ? (
+        {phase === "report" && (report || comparison) ? (
           <motion.section
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.45 }}
             className="space-y-6"
           >
-            <Panel className="overflow-hidden">
+            {comparison ? (
+              <>
+                <Panel className="overflow-hidden">
+                  <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="mono text-xs uppercase tracking-[0.18em] text-[var(--accent-secondary)]">
+                        Comparison Dossier
+                      </p>
+                      <h2 className="mt-2 text-2xl font-bold uppercase md:text-3xl">
+                        Dual Repo Analysis
+                      </h2>
+                      <p className="mt-3 text-sm text-[var(--muted)]">
+                        Rule Pack: {comparison.left.rulePack}
+                      </p>
+                    </div>
+                    <div className="stamp rounded-md px-5 py-2 text-center text-sm font-bold uppercase tracking-[0.2em]">
+                      Complete
+                    </div>
+                  </div>
+                </Panel>
+
+                <Panel>
+                  <h3 className="text-lg font-semibold uppercase">Comparison Callouts</h3>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    {statLabel("Strongest Signal", comparison.callouts.strongestRepo)}
+                    {statLabel("Most Risky", comparison.callouts.mostRiskyRepo)}
+                    {statLabel("Health Lead", `${comparison.callouts.healthLead} pts`)}
+                    {statLabel("Risk Gap", `${comparison.callouts.riskGap} tier(s)`)}
+                  </div>
+                </Panel>
+
+                <div className="grid gap-6 lg:grid-cols-2">
+                  <Panel>
+                    <h3 className="text-lg font-semibold uppercase">
+                      {comparison.left.repository.fullName}
+                    </h3>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      {statLabel("Overall Health", `${comparison.left.verdict.overallHealth} / 100`)}
+                      {statLabel("AI Assistance", `${comparison.left.aiAssistance.score}%`)}
+                      {statLabel("Documentation", `${comparison.left.documentation.score}`)}
+                      {statLabel("Maintainability", `${comparison.left.maintainability.score}`)}
+                      {statLabel("Technical Debt", `${comparison.left.technicalDebt.index}%`)}
+                      {statLabel("Testing", `${comparison.left.testing.coverageConfidence}%`)}
+                      {statLabel("Risk Level", comparison.left.risk.level)}
+                    </div>
+                  </Panel>
+
+                  <Panel>
+                    <h3 className="text-lg font-semibold uppercase">
+                      {comparison.right.repository.fullName}
+                    </h3>
+                    <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                      {statLabel("Overall Health", `${comparison.right.verdict.overallHealth} / 100`)}
+                      {statLabel("AI Assistance", `${comparison.right.aiAssistance.score}%`)}
+                      {statLabel("Documentation", `${comparison.right.documentation.score}`)}
+                      {statLabel("Maintainability", `${comparison.right.maintainability.score}`)}
+                      {statLabel("Technical Debt", `${comparison.right.technicalDebt.index}%`)}
+                      {statLabel("Testing", `${comparison.right.testing.coverageConfidence}%`)}
+                      {statLabel("Risk Level", comparison.right.risk.level)}
+                    </div>
+                  </Panel>
+                </div>
+
+                <Panel>
+                  <h3 className="text-lg font-semibold uppercase">Metric Deltas</h3>
+                  <div className="mt-4 space-y-3 text-sm">
+                    {comparison.deltas.map((delta) => (
+                      <div key={delta.metric} className="flex flex-wrap items-center justify-between gap-3">
+                        <span className="text-[var(--muted)]">{delta.metric}</span>
+                        <span className="text-xs text-[var(--foreground)]">
+                          {delta.left} → {delta.right}
+                        </span>
+                        <span
+                          className={`text-xs font-semibold ${
+                            delta.delta === 0
+                              ? "text-[var(--muted)]"
+                              : negativeComparisonMetrics.has(delta.metric)
+                                ? delta.delta > 0
+                                  ? "text-[var(--danger)]"
+                                  : "text-[var(--accent-primary)]"
+                                : delta.delta > 0
+                                  ? "text-[var(--accent-primary)]"
+                                  : "text-[var(--danger)]"
+                          }`}
+                        >
+                          {delta.delta > 0 ? "+" : ""}
+                          {delta.delta}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+
+                <Panel>
+                  <h3 className="text-lg font-semibold uppercase">Export Comparison</h3>
+                  <div className="mt-4">
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start gap-2"
+                      onClick={downloadComparisonJson}
+                    >
+                      <Download className="h-4 w-4" />
+                      Download Comparison JSON
+                    </Button>
+                  </div>
+                </Panel>
+              </>
+            ) : null}
+            {report ? (
+              <>
+                <Panel className="overflow-hidden">
               <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
                 <div>
                   <p className="mono text-xs uppercase tracking-[0.18em] text-[var(--accent-secondary)]">CASE FILE</p>
@@ -330,6 +683,7 @@ export default function Home() {
                 {statLabel("Repository Age", report.repository.repositoryAge)}
                 {statLabel("Last Activity", report.repository.lastActivity)}
                 {statLabel("Dependency Count", report.repository.dependencyCount)}
+                {statLabel("Rule Pack", report.rulePack)}
               </div>
             </Panel>
 
@@ -489,6 +843,19 @@ ${report.verdict.style}
                     <Download className="h-4 w-4" />
                     Download PNG
                   </Button>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-start gap-2"
+                    onClick={downloadReportPdf}
+                    disabled={isExportingPdf}
+                  >
+                    <Download className="h-4 w-4" />
+                    {isExportingPdf ? "Building PDF..." : "Download PDF"}
+                  </Button>
+                  <Button variant="outline" className="w-full justify-start gap-2" onClick={downloadReportJson}>
+                    <Download className="h-4 w-4" />
+                    Download JSON
+                  </Button>
                   <Button variant="outline" className="w-full justify-start gap-2" onClick={copyPublicLink}>
                     <Copy className="h-4 w-4" />
                     Copy Public Link
@@ -513,6 +880,157 @@ ${report.verdict.style}
                 </div>
               </div>
             </Panel>
+
+            <Panel>
+              <h3 className="text-lg font-semibold uppercase">Explainable Findings</h3>
+              <div className="mt-4 grid gap-4 md:grid-cols-2">
+                {report.explainableFindings.map((finding) => (
+                  <div key={finding.id} className="rounded-lg border border-[var(--border)] bg-black/25 p-4">
+                    <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
+                      {finding.category}
+                    </p>
+                    <p className="mt-2 text-sm font-semibold text-[var(--foreground)]">{finding.title}</p>
+                    <p className="mt-2 text-xs text-[var(--muted)]">{finding.summary}</p>
+                    <div className="mt-3 space-y-2 text-xs text-zinc-200">
+                      {finding.evidence.map((evidence) => (
+                        <div key={`${finding.id}-${evidence.label}`} className="flex flex-col gap-1">
+                          <span className="text-[var(--muted)]">{evidence.label}</span>
+                          <span>{evidence.value}</span>
+                          {evidence.path ? (
+                            <span className="text-[0.7rem] text-[var(--accent-secondary)]">
+                              {evidence.path}
+                            </span>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Panel>
+                <h3 className="text-lg font-semibold uppercase">Historical Trend Scans</h3>
+                {persistenceNote ? (
+                  <div className="mt-3 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-xs text-[var(--danger)]">
+                    {persistenceNote}
+                  </div>
+                ) : null}
+                <div className="mt-4 space-y-3 text-xs text-[var(--muted)]">
+                  {history.length === 0 ? (
+                    <p>No prior scans stored yet.</p>
+                  ) : (
+                    history.map((item) => (
+                      <div key={item.caseId} className="flex items-center gap-3">
+                        <span className="w-20 text-[0.65rem] uppercase tracking-[0.12em] text-[var(--muted)]">
+                          {new Date(item.generatedAt).toLocaleDateString()}
+                        </span>
+                        <div className="h-2 flex-1 rounded-full bg-black/40">
+                          <div
+                            className="h-2 rounded-full bg-[var(--accent-primary)]"
+                            style={{ width: `${item.overallHealth}%` }}
+                          />
+                        </div>
+                        <span className="text-[var(--foreground)]">{item.overallHealth}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </Panel>
+
+              <Panel>
+                <h3 className="text-lg font-semibold uppercase">Organization Snapshot</h3>
+                {orgSummary ? (
+                  <div className="mt-4 space-y-3 text-sm text-[var(--muted)]">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      {statLabel("Owner", orgSummary.owner)}
+                      {statLabel("Repos Tracked", orgSummary.totalRepos)}
+                      {statLabel("Total Scans", orgSummary.totalScans)}
+                      {statLabel("Average Health", `${orgSummary.averageHealth} / 100`)}
+                      {statLabel("High Risk", orgSummary.riskBreakdown.HIGH)}
+                      {statLabel("Medium Risk", orgSummary.riskBreakdown.MEDIUM)}
+                      {statLabel("Low Risk", orgSummary.riskBreakdown.LOW)}
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {orgSummary.topRepos.map((repoEntry) => (
+                        <div key={repoEntry.repoFullName} className="flex items-center justify-between text-xs">
+                          <span className="text-[var(--foreground)]">{repoEntry.repoFullName}</span>
+                          <span className="text-[var(--muted)]">
+                            {repoEntry.averageHealth} avg / {repoEntry.scans} scans
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-[var(--muted)]">No organization history yet.</p>
+                )}
+              </Panel>
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Panel>
+                <h3 className="text-lg font-semibold uppercase">CI / GitHub App Integration</h3>
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  Use the CI summary endpoint or a scheduled GitHub Actions workflow to keep scans fresh.
+                </p>
+                <div className="mt-4 space-y-3">
+                  <label className="text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                    Schedule cadence
+                  </label>
+                  <select
+                    className="w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-xs text-[var(--foreground)]"
+                    value={schedule}
+                    onChange={(event) =>
+                      setSchedule(event.target.value as "daily" | "weekly" | "monthly")
+                    }
+                  >
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                  <pre className="whitespace-pre-wrap rounded-md border border-[var(--border)] bg-black/40 p-3 text-[0.65rem] text-[#bcffe8]">
+{`name: VibeScore Scan
+on:
+  schedule:
+    - cron: "${schedule === "daily" ? "0 2 * * *" : schedule === "weekly" ? "0 2 * * 1" : "0 3 1 * *"}"
+  workflow_dispatch:
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger VibeScore
+        run: |
+          curl -X POST "$VIBESCORE_URL/api/ci-summary" \\
+            -H "Content-Type: application/json" \\
+            -d '{\"repoUrl\":\"https://github.com/${report.repository.fullName}\",\"rulePack\":\"${report.rulePack}\"}'`}
+                  </pre>
+                </div>
+              </Panel>
+
+              <Panel>
+                <h3 className="text-lg font-semibold uppercase">Public Badge</h3>
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  Embed the latest health score badge in README or dashboards.
+                </p>
+                <div className="mt-4 space-y-3">
+                  <Image
+                    src={`/api/badge?repo=${encodeURIComponent(report.repository.fullName)}`}
+                    alt="VibeScore badge"
+                    width={310}
+                    height={40}
+                    unoptimized
+                    className="h-8 w-auto"
+                  />
+                  <pre className="whitespace-pre-wrap rounded-md border border-[var(--border)] bg-black/40 p-3 text-[0.65rem] text-[#bcffe8]">
+{`![VibeScore](/api/badge?repo=${report.repository.fullName})`}
+                  </pre>
+                </div>
+              </Panel>
+            </div>
+              </>
+            ) : null}
           </motion.section>
         ) : null}
 

@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { parse } from "@babel/parser";
 import traverse from "@babel/traverse";
 
@@ -5,12 +6,16 @@ import {
   type AnalysisScore,
   type ArchitectureReview,
   type DocumentationEvidence,
+  type ExplainableFinding,
   type InvestigationReport,
   type RepoArchetype,
   type RepositoryIdentity,
   type RiskLevel,
+  type RulePackId,
   type TestingReadiness,
 } from "@/types/report";
+import { prisma } from "@/lib/prisma";
+import { resolveRulePack } from "@/lib/rule-packs";
 
 interface GitHubRepoPayload {
   full_name: string;
@@ -37,14 +42,18 @@ interface RawMetrics {
   dependencyCount: number;
   readmeLength: number;
   docsFlags: string[];
+  docFiles: string[];
   astFilesParsed: number;
   functionCount: number;
   importCount: number;
   maxNesting: number;
   longFileCount: number;
+  longFiles: string[];
   duplicateSignal: number;
   todoCount: number;
+  todoFiles: string[];
   testFiles: number;
+  testFilePaths: string[];
   frameworks: string[];
   staleDays: number;
   topFolders: string[];
@@ -88,6 +97,14 @@ function normalizeToScore(value: number) {
   return Math.round(clamp(value, 0, 100));
 }
 
+function riskScoreFromLevel(level: RiskLevel) {
+  return level === "LOW" ? 100 : level === "MEDIUM" ? 65 : 35;
+}
+
+function formatList(list: string[], fallback: string) {
+  return list.length > 0 ? list.join(", ") : fallback;
+}
+
 function parseRepositoryUrl(repoUrl: string) {
   const cleaned = repoUrl
     .trim()
@@ -104,7 +121,7 @@ function parseRepositoryUrl(repoUrl: string) {
 }
 
 async function githubRequest<T>(path: string): Promise<T> {
-  const token = process.env.GITHUB_TOKEN;
+  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   const response = await fetch(`https://api.github.com${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -114,7 +131,31 @@ async function githubRequest<T>(path: string): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`GitHub API request failed: ${response.status}`);
+    let apiMessage = "";
+    try {
+      const payload = (await response.json()) as { message?: string };
+      apiMessage = payload.message ?? "";
+    } catch {
+      apiMessage = "";
+    }
+
+    if (response.status === 403) {
+      const remaining = response.headers.get("x-ratelimit-remaining");
+      const reset = response.headers.get("x-ratelimit-reset");
+      const resetAt = reset
+        ? new Date(Number.parseInt(reset, 10) * 1000).toISOString()
+        : "unknown";
+
+      throw new Error(
+        `GitHub API request failed: 403. ${
+          apiMessage || "Rate limit exceeded or access denied."
+        } Add GIT_TOKEN to .env.local for higher API limits. Remaining: ${remaining ?? "unknown"}. Reset: ${resetAt}.`,
+      );
+    }
+
+    throw new Error(
+      `GitHub API request failed: ${response.status}${apiMessage ? ` - ${apiMessage}` : ""}`,
+    );
   }
 
   return (await response.json()) as T;
@@ -318,11 +359,21 @@ function buildRawMetrics(args: {
       : null,
   ].filter((item): item is string => !!item);
 
+  const docFiles = fileEntries
+    .filter((file) => {
+      const lower = file.path.toLowerCase();
+      return lower.endsWith(".md") || /(^|\/)docs\//i.test(lower);
+    })
+    .slice(0, 10)
+    .map((file) => file.path);
+
   const readme = files.find((file) => /readme\.md$/i.test(file.path));
   const readmeLength = readme?.content.length ?? 0;
 
-  const longFileCount = files.filter((file) => file.content.split("\n").length > 350).length;
-  const todoCount = files.reduce((count, file) => {
+  const longFiles = files.filter((file) => file.content.split("\n").length > 350);
+  const longFileCount = longFiles.length;
+  const todoFiles = files.filter((file) => /TODO|FIXME|HACK/gi.test(file.content));
+  const todoCount = todoFiles.reduce((count, file) => {
     return count + (file.content.match(/TODO|FIXME|HACK/gi)?.length ?? 0);
   }, 0);
 
@@ -357,9 +408,10 @@ function buildRawMetrics(args: {
       ).length
     : 0;
 
-  const testFiles = fileEntries.filter((file) =>
+  const testFilePaths = fileEntries.filter((file) =>
     /(test|spec)\.(ts|tsx|js|jsx|py|go|java|rb|rs)$|__tests__/i.test(file.path),
-  ).length;
+  );
+  const testFiles = testFilePaths.length;
 
   const topFolders = Array.from(
     new Set(
@@ -393,14 +445,18 @@ function buildRawMetrics(args: {
     dependencyCount,
     readmeLength,
     docsFlags,
+    docFiles,
     astFilesParsed,
     functionCount,
     importCount,
     maxNesting,
     longFileCount,
+    longFiles: longFiles.map((file) => file.path).slice(0, 6),
     duplicateSignal,
     todoCount,
+    todoFiles: todoFiles.map((file) => file.path).slice(0, 6),
     testFiles,
+    testFilePaths: testFilePaths.map((file) => file.path).slice(0, 8),
     frameworks: extractFrameworks(packageJson),
     staleDays,
     topFolders,
@@ -555,6 +611,164 @@ function buildRisk(metrics: RawMetrics, debtIndex: number, maintainability: numb
   return { level, summary };
 }
 
+function buildExplainableFindings(args: {
+  metrics: RawMetrics;
+  ai: AnalysisScore;
+  documentation: DocumentationEvidence;
+  maintainability: AnalysisScore;
+  architecture: ArchitectureReview;
+  technicalDebt: { debtLevel: RiskLevel; index: number; findings: string[] };
+  testing: TestingReadiness;
+  risk: { level: RiskLevel; summary: string };
+}): ExplainableFinding[] {
+  const { metrics, ai, documentation, maintainability, architecture, technicalDebt, testing, risk } = args;
+
+  return [
+    {
+      id: "ai-assistance",
+      category: "AI Assistance",
+      title: "Patterned delivery signals",
+      summary: ai.narrative,
+      evidence: [
+        {
+          label: "Repetition signal",
+          value: `${Math.round(metrics.duplicateSignal * 100)}%`,
+        },
+        {
+          label: "Import density",
+          value: `${metrics.importCount} imports across ${metrics.astFilesParsed} files`,
+        },
+        {
+          label: "Function footprint",
+          value: `${metrics.functionCount} functions sampled`,
+        },
+      ],
+    },
+    {
+      id: "documentation",
+      category: "Documentation",
+      title: "Documentation evidence",
+      summary: `Documentation score ${documentation.score} (${documentation.status}).`,
+      evidence: [
+        {
+          label: "Signals",
+          value: formatList(metrics.docsFlags, "No strong documentation signals."),
+        },
+        {
+          label: "Doc files",
+          value: formatList(metrics.docFiles, "No docs files detected."),
+          path: metrics.docFiles[0],
+        },
+        {
+          label: "README size",
+          value: `${metrics.readmeLength.toLocaleString()} characters`,
+        },
+      ],
+    },
+    {
+      id: "maintainability",
+      category: "Maintainability",
+      title: "Maintainability surface",
+      summary: maintainability.narrative,
+      evidence: [
+        {
+          label: "Top folders",
+          value: formatList(metrics.topFolders, "No clear module folders detected."),
+        },
+        {
+          label: "Deep nesting",
+          value: `${metrics.maxNesting} levels`,
+        },
+        {
+          label: "Large files",
+          value: formatList(metrics.longFiles, "No oversized files in sample."),
+          path: metrics.longFiles[0],
+        },
+      ],
+    },
+    {
+      id: "architecture",
+      category: "Architecture",
+      title: "Structural signals",
+      summary: architecture.assessment,
+      evidence: [
+        {
+          label: "Folder spread",
+          value: `${metrics.topFolders.length} top-level modules`,
+        },
+        {
+          label: "Dependency footprint",
+          value: `${metrics.dependencyCount} dependencies detected`,
+        },
+        {
+          label: "Longest file set",
+          value: metrics.longFiles.length ? `${metrics.longFiles.length} sampled` : "No long files sampled.",
+          path: metrics.longFiles[0],
+        },
+      ],
+    },
+    {
+      id: "technical-debt",
+      category: "Technical Debt",
+      title: "Debt markers",
+      summary: `Debt index ${technicalDebt.index}% (${technicalDebt.debtLevel} risk).`,
+      evidence: [
+        {
+          label: "Deferred markers",
+          value: `${metrics.todoCount} TODO/FIXME/HACK markers`,
+          path: metrics.todoFiles[0],
+        },
+        {
+          label: "Large files",
+          value: `${metrics.longFileCount} large files`,
+          path: metrics.longFiles[0],
+        },
+        {
+          label: "Duplication signal",
+          value: `${Math.round(metrics.duplicateSignal * 100)}%`,
+        },
+      ],
+    },
+    {
+      id: "testing",
+      category: "Testing",
+      title: "Testing signals",
+      summary: testing.health,
+      evidence: [
+        {
+          label: "Test files",
+          value: `${metrics.testFiles} detected`,
+          path: metrics.testFilePaths[0],
+        },
+        {
+          label: "Frameworks",
+          value: formatList(testing.frameworks, "No framework detected"),
+        },
+      ],
+    },
+    {
+      id: "risk",
+      category: "Risk",
+      title: "Risk posture",
+      summary: risk.summary,
+      evidence: [
+        {
+          label: "Staleness",
+          value: `${metrics.staleDays} days since last activity`,
+        },
+        {
+          label: "Debt index",
+          value: `${technicalDebt.index}%`,
+        },
+        {
+          label: "Maintainability score",
+          value: `${maintainability.score}`,
+        },
+      ],
+    },
+  ];
+}
+
 function inferArchetype(args: {
   aiScore: number;
   maintainability: number;
@@ -606,11 +820,16 @@ function buildRepositoryAge(createdAt: string) {
   return `${Math.floor(months / 12)} years`;
 }
 
-export async function investigateRepository(repoUrl: string): Promise<{
+export async function investigateRepository(
+  repoUrl: string,
+  options: { rulePack?: RulePackId | string; persist?: boolean } = {},
+): Promise<{
   logs: string[];
   report: InvestigationReport;
+  persistence?: { enabled: boolean; message?: string };
 }> {
   const { owner, repo } = parseRepositoryUrl(repoUrl);
+  const rulePack = resolveRulePack(options.rulePack);
 
   const repoPayload = await githubRequest<GitHubRepoPayload>(`/repos/${owner}/${repo}`);
   const [tree, contributors, packageJson, readmePreview] = await Promise.all([
@@ -655,6 +874,16 @@ export async function investigateRepository(repoUrl: string): Promise<{
   const technicalDebt = buildTechnicalDebt(metrics);
   const testing = buildTesting(metrics);
   const risk = buildRisk(metrics, technicalDebt.index, maintainability.score);
+  const explainableFindings = buildExplainableFindings({
+    metrics,
+    ai: aiAssistance,
+    documentation,
+    maintainability,
+    architecture,
+    technicalDebt,
+    testing,
+    risk,
+  });
   const archetype = inferArchetype({
     aiScore: aiAssistance.score,
     maintainability: maintainability.score,
@@ -663,12 +892,13 @@ export async function investigateRepository(repoUrl: string): Promise<{
     staleDays: metrics.staleDays,
   });
 
+  const riskScore = riskScoreFromLevel(risk.level);
   const overallHealth = normalizeToScore(
-    documentation.score * 0.22 +
-      maintainability.score * 0.3 +
-      (100 - technicalDebt.index) * 0.2 +
-      testing.coverageConfidence * 0.18 +
-      (risk.level === "LOW" ? 100 : risk.level === "MEDIUM" ? 65 : 35) * 0.1,
+    documentation.score * rulePack.weights.documentation +
+      maintainability.score * rulePack.weights.maintainability +
+      (100 - technicalDebt.index) * rulePack.weights.technicalDebt +
+      testing.coverageConfidence * rulePack.weights.testing +
+      riskScore * rulePack.weights.risk,
   );
 
   const style =
@@ -717,7 +947,32 @@ export async function investigateRepository(repoUrl: string): Promise<{
       style,
     },
     generatedAt: new Date().toISOString(),
+    rulePack: rulePack.id,
+    explainableFindings,
   };
 
-  return { logs: LOGS, report };
+  let persistence: { enabled: boolean; message?: string } | undefined;
+
+  if (options.persist !== false && process.env.DATABASE_URL) {
+    try {
+      const payload = report as unknown as Prisma.JsonObject;
+      await prisma.investigation.create({
+        data: {
+          repoFullName: report.repository.fullName,
+          caseId: report.caseId,
+          payload,
+        },
+      });
+      persistence = { enabled: true };
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Failed to persist investigation history.";
+      console.error("Investigation persistence failed:", message);
+      persistence = { enabled: false, message };
+    }
+  }
+
+  return { logs: LOGS, report, persistence };
 }

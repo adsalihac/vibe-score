@@ -4,7 +4,7 @@ import { investigateRepository } from "@/lib/investigation";
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { repoUrl?: string };
+    const body = (await request.json()) as { repoUrl?: string; rulePack?: string };
 
     if (!body.repoUrl) {
       return NextResponse.json(
@@ -13,7 +13,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const result = await investigateRepository(body.repoUrl);
+    const result = await investigateRepository(body.repoUrl, {
+      rulePack: body.rulePack,
+    });
     return NextResponse.json(result);
   } catch (error) {
     const message =
