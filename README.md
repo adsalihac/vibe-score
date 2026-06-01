@@ -52,7 +52,7 @@ npm install
 cp .env.example .env
 ```
 
-3. Update .env values, especially DATABASE_URL and optional GITHUB_TOKEN.
+3. Update .env values, especially DATABASE_URL and optional GIT_TOKEN.
 
    - DATABASE_URL is required for historical trends, organization snapshots, and badges.
 
