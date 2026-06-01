@@ -1,17 +1,19 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toPng } from "html-to-image";
 import {
   AlertTriangle,
   Binary,
+  Coffee,
   Copy,
   Download,
   ExternalLink,
+  GitFork,
   Link2,
-  Radar,
   Share2,
+  Star,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -34,6 +36,9 @@ const INVESTIGATION_LOGS = [
 
 type Phase = "idle" | "investigating" | "report";
 
+const PROJECT_REPO = "adsalihac/vibe-score";
+const BUY_ME_COFFEE_URL = "https://www.buymeacoffee.com/adsalihac";
+
 function statLabel(label: string, value: string | number) {
   return (
     <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
@@ -50,21 +55,40 @@ function scoreTint(value: number) {
 }
 
 export default function Home() {
-  const [repoUrl, setRepoUrl] = useState(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-
-    const params = new URLSearchParams(window.location.search);
-    return params.get("repo") ?? "";
-  });
+  const [repoUrl, setRepoUrl] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<InvestigationReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [typingLine, setTypingLine] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [starCount, setStarCount] = useState<number | null>(null);
   const reportCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const loadStars = async () => {
+      try {
+        const response = await fetch(`https://api.github.com/repos/${PROJECT_REPO}`);
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as { stargazers_count?: number };
+        if (mounted && typeof data.stargazers_count === "number") {
+          setStarCount(data.stargazers_count);
+        }
+      } catch {
+        // Ignore star count failures and keep UI functional.
+      }
+    };
+
+    void loadStars();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const topShareLine = useMemo(() => {
     if (!report) return "";
@@ -139,9 +163,6 @@ export default function Home() {
       setLogs(data.logs);
       setReport(data.report);
       setPhase("report");
-
-      const shareUrl = `${window.location.origin}/?repo=${encodeURIComponent(repoUrl.trim())}`;
-      window.history.replaceState({}, "", shareUrl);
     } catch (err) {
       setPhase("idle");
       setError(err instanceof Error ? err.message : "Investigation failed.");
@@ -169,23 +190,19 @@ export default function Home() {
   };
 
   const copyPublicLink = async () => {
-    const url = `${window.location.origin}/?repo=${encodeURIComponent(repoUrl.trim())}`;
+    const url = window.location.origin;
     await navigator.clipboard.writeText(url);
   };
 
   const shareOnX = () => {
     if (!report) return;
     const text = encodeURIComponent(`VibeScore Investigation: ${topShareLine}`);
-    const url = encodeURIComponent(
-      `${window.location.origin}/?repo=${encodeURIComponent(repoUrl.trim())}`,
-    );
+    const url = encodeURIComponent(window.location.origin);
     window.open(`https://x.com/intent/tweet?text=${text}&url=${url}`, "_blank");
   };
 
   const shareOnLinkedIn = () => {
-    const url = encodeURIComponent(
-      `${window.location.origin}/?repo=${encodeURIComponent(repoUrl.trim())}`,
-    );
+    const url = encodeURIComponent(window.location.origin);
     window.open(`https://www.linkedin.com/sharing/share-offsite/?url=${url}`, "_blank");
   };
 
@@ -499,9 +516,37 @@ ${report.verdict.style}
           </motion.section>
         ) : null}
 
-        <div className="flex items-center justify-end gap-3 pb-6 text-[0.65rem] uppercase tracking-[0.15em] text-zinc-500">
-          <Radar className="h-3.5 w-3.5" />
-          Threat-model inspired repository intelligence
+        <div className="flex flex-col items-start justify-between gap-3 pb-6 md:flex-row md:items-center">
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={`https://github.com/${PROJECT_REPO}/fork`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-black/20 px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-zinc-200 transition hover:border-[var(--accent-secondary)] hover:text-[var(--accent-secondary)]"
+            >
+              <GitFork className="h-3.5 w-3.5" />
+              Contribute
+            </a>
+            <a
+              href={`https://github.com/${PROJECT_REPO}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-black/20 px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-zinc-300 transition hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)]"
+            >
+              <Star className="h-3.5 w-3.5" />
+              {starCount === null ? "Stars --" : `Stars ${starCount}`}
+            </a>
+          </div>
+
+          <a
+            href={BUY_ME_COFFEE_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 rounded-md border border-[var(--border)] bg-black/20 px-3 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-[#ffd36d] transition hover:border-[#ffd36d]/70 hover:bg-[#ffd36d]/10"
+          >
+            <Coffee className="h-3.5 w-3.5" />
+            Buy Me a Coffee
+          </a>
         </div>
       </div>
     </main>
