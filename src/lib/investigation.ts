@@ -121,7 +121,7 @@ function parseRepositoryUrl(repoUrl: string) {
 }
 
 async function githubRequest<T>(path: string): Promise<T> {
-  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  const token = process.env.GIT_TOKEN || process.env.GH_TOKEN;
   const response = await fetch(`https://api.github.com${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
