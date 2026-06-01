@@ -89,14 +89,14 @@ export default function Home() {
 
     const loadStars = async () => {
       try {
-        const response = await fetch(`https://api.github.com/repos/${PROJECT_REPO}`);
+        const response = await fetch(`/api/stars?repo=${encodeURIComponent(PROJECT_REPO)}`);
         if (!response.ok) {
           return;
         }
 
-        const data = (await response.json()) as { stargazers_count?: number };
-        if (mounted && typeof data.stargazers_count === "number") {
-          setStarCount(data.stargazers_count);
+        const data = (await response.json()) as { stars?: number | null };
+        if (mounted && typeof data.stars === "number") {
+          setStarCount(data.stars);
         }
       } catch {
         // Ignore star count failures and keep UI functional.
