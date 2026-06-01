@@ -66,8 +66,7 @@ export async function GET(request: Request) {
 
     const payload = latest?.payload as Partial<InvestigationReport> | null;
     return buildBadgeSvg(payload?.verdict?.overallHealth);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to generate badge.";
-    return new Response(message, { status: 500 });
+  } catch {
+    return buildBadgeSvg(undefined);
   }
 }

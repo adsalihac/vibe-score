@@ -120,6 +120,18 @@ function parseRepositoryUrl(repoUrl: string) {
   return { owner: match[1], repo: match[2] };
 }
 
+function isDatabaseConnectionError(message: string) {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("authentication failed") ||
+    lower.includes("p1000") ||
+    lower.includes("can't reach database server") ||
+    lower.includes("p1001") ||
+    lower.includes("invalid database") ||
+    lower.includes("database credentials")
+  );
+}
+
 async function githubRequest<T>(path: string): Promise<T> {
   const token = process.env.GIT_TOKEN || process.env.GH_TOKEN;
   const response = await fetch(`https://api.github.com${path}`, {
@@ -965,11 +977,16 @@ export async function investigateRepository(
       });
       persistence = { enabled: true };
     } catch (error) {
-      const message =
+      const rawMessage =
         error instanceof Error
           ? error.message
           : "Failed to persist investigation history.";
-      console.error("Investigation persistence failed:", message);
+
+      const message = isDatabaseConnectionError(rawMessage)
+        ? "Historical Trend Scans are unavailable because database connection is not configured correctly. Investigations still run normally."
+        : "Historical Trend Scans are temporarily unavailable.";
+
+      console.error("Investigation persistence failed:", rawMessage);
       persistence = { enabled: false, message };
     }
   }

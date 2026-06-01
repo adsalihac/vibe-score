@@ -41,9 +41,7 @@ export async function GET(request: Request) {
       .filter((item): item is HistoricalInvestigation => !!item);
 
     return NextResponse.json({ items: history });
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to fetch investigation history.";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ items: [] });
   }
 }

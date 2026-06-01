@@ -9,13 +9,16 @@ function roundAverage(total: number, count: number) {
 }
 
 export async function GET(request: Request) {
+  let owner = "unknown";
   try {
     const { searchParams } = new URL(request.url);
-    const owner = searchParams.get("owner");
+    const ownerParam = searchParams.get("owner");
 
-    if (!owner) {
+    if (!ownerParam) {
       return NextResponse.json({ error: "Owner is required." }, { status: 400 });
     }
+
+    owner = ownerParam;
 
     if (!process.env.DATABASE_URL) {
       return NextResponse.json({
@@ -91,9 +94,15 @@ export async function GET(request: Request) {
     };
 
     return NextResponse.json(summary);
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to fetch organization summary.";
-    return NextResponse.json({ error: message }, { status: 500 });
+  } catch {
+    return NextResponse.json({
+      owner,
+      totalRepos: 0,
+      totalScans: 0,
+      averageHealth: 0,
+      riskBreakdown: { LOW: 0, MEDIUM: 0, HIGH: 0 },
+      latestScanAt: null,
+      topRepos: [],
+    } satisfies OrganizationSummary);
   }
 }

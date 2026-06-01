@@ -1,14 +1,14 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { JetBrains_Mono, Manrope, Sora } from "next/font/google";
 import "./globals.css";
 
-const headingFont = Space_Grotesk({
+const headingFont = Sora({
   variable: "--font-heading",
   subsets: ["latin"],
   display: "swap",
 });
 
-const bodyFont = Inter({
+const bodyFont = Manrope({
   variable: "--font-body",
   subsets: ["latin"],
   display: "swap",
