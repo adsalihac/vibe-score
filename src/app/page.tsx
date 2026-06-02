@@ -1329,7 +1329,7 @@ jobs:
     steps:
       - name: Trigger VibeScore
         run: |
-          curl -X POST "$VIBESCORE_URL/api/ci-summary" \\
+          curl -X POST "${typeof window !== "undefined" ? window.location.origin : ""}/api/ci-summary" \\
             -H "Content-Type: application/json" \\
             -d '${ciPayload}'`}
                   </pre>
