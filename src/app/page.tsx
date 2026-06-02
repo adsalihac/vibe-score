@@ -397,9 +397,20 @@ export default function Home() {
           className="signal-frame scan-lines relative overflow-hidden rounded-2xl p-6 md:p-10"
         >
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent-primary)] to-transparent opacity-60" />
-          <p className="mono text-xs uppercase tracking-[0.25em] text-[var(--accent-secondary)]">
-            VibeScore // Repository Forensics
-          </p>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <Image
+              src="/logo-mark.svg"
+              alt="VibeScore"
+              width={56}
+              height={56}
+              unoptimized
+              priority
+              className="h-14 w-14 shrink-0"
+            />
+            <p className="mono text-xs uppercase tracking-[0.25em] text-[var(--accent-secondary)]">
+              VibeScore // Repository Forensics
+            </p>
+          </div>
           <h1 className="mt-5 max-w-2xl text-4xl font-bold uppercase leading-tight text-white md:text-6xl">
             WE INVESTIGATE CODE.
           </h1>

@@ -1,0 +1,18 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">VibeScore logo</title>
+  <desc id="desc">A simple abstract score-signal path inside an angular app tile.</desc>
+  <rect width="512" height="512" rx="112" fill="#040506"/>
+  <path d="M256 82L392 160V316L256 394L120 316V160L256 82Z" fill="#0A0D10" stroke="#1B232D" stroke-width="16" stroke-linejoin="round"/>
+  <path d="M154 318L226 246L294 284L382 174" stroke="url(#scorePath)" stroke-width="44" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="154" cy="318" r="26" fill="#00FFB3"/>
+  <circle cx="226" cy="246" r="24" fill="#A7FFDF"/>
+  <circle cx="294" cy="284" r="24" fill="#EDF5FF"/>
+  <circle cx="382" cy="174" r="28" fill="#4D9FFF"/>
+  <defs>
+    <linearGradient id="scorePath" x1="154" y1="318" x2="382" y2="174" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#00FFB3"/>
+      <stop offset="0.52" stop-color="#EDF5FF"/>
+      <stop offset="1" stop-color="#4D9FFF"/>
+    </linearGradient>
+  </defs>
+</svg>
