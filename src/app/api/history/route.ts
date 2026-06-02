@@ -3,6 +3,17 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { type HistoricalInvestigation, type InvestigationReport } from "@/types/report";
 
+function reportMetricSnapshot(payload: Partial<InvestigationReport>) {
+  return {
+    aiAssistance: payload.aiAssistance?.score ?? 0,
+    documentation: payload.documentation?.score ?? 0,
+    maintainability: payload.maintainability?.score ?? 0,
+    technicalDebt: payload.technicalDebt?.index ?? 0,
+    testing: payload.testing?.coverageConfidence ?? 0,
+    secretHygiene: payload.secretHygiene?.score ?? 0,
+  };
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -36,6 +47,7 @@ export async function GET(request: Request) {
           verdictStyle: payload.verdict.style ?? "Human-led",
           generatedAt: payload.generatedAt ?? item.createdAt.toISOString(),
           rulePack: payload.rulePack ?? "startup",
+          metrics: reportMetricSnapshot(payload),
         };
       })
       .filter((item): item is HistoricalInvestigation => !!item);

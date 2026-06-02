@@ -10,19 +10,22 @@ VibeScore analyzes repository structure, code patterns, documentation quality, t
 
 - Single-page forensic experience with mission-control style UI
 - GitHub repository URL intake and automated investigation flow
+- Default branch, named branch, and pull request scan scopes
 - Animated terminal-like live investigation logs
 - AST-assisted code pattern analysis
 - AI assistance likelihood estimation (never hard certainty)
+- Secret hygiene review with redacted token-pattern detection
 - Documentation evidence detection and scoring
 - Maintainability and architecture review sections
 - Technical debt index with contextual findings
 - Testing readiness confidence with framework detection
 - Risk assessment and final production-readiness verdict
+- Prioritized remediation plan with impact, effort, and evidence
 - Shareable report card with PNG export and social sharing
 - Repo comparison mode with side-by-side deltas
 - Explainable findings with evidence references
 - Rule packs (Startup, Enterprise, OSS) for weighted scoring
-- Historical scan trends and organization snapshots
+- Historical scan trends with previous-scan deltas and organization snapshots
 - CI-ready summary endpoint and scheduled scan workflow snippet
 - Export bundle with PDF + JSON downloads
 - Public badge for README or dashboard embedding

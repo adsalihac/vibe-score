@@ -2,6 +2,8 @@ export type RiskLevel = "LOW" | "MEDIUM" | "HIGH";
 
 export type RulePackId = "startup" | "enterprise" | "oss";
 
+export type ScanTargetMode = "default" | "branch" | "pull_request";
+
 export type RepoArchetype =
   | "Architect"
   | "Startup Chaos"
@@ -19,6 +21,18 @@ export interface RepositoryIdentity {
   repositoryAge: string;
   lastActivity: string;
   dependencyCount: number;
+}
+
+export interface ScanTarget {
+  mode: ScanTargetMode;
+  label: string;
+  ref: string;
+  requestedRef?: string;
+  baseRef?: string;
+  headRef?: string;
+  pullRequestNumber?: number;
+  pullRequestTitle?: string;
+  changedFiles?: number;
 }
 
 export interface AnalysisScore {
@@ -50,6 +64,14 @@ export interface TestingReadiness {
   health: string;
 }
 
+export interface SecretHygiene {
+  status: "CLEAR" | "WATCH" | "RISK";
+  score: number;
+  summary: string;
+  signals: string[];
+  findings: string[];
+}
+
 export interface RiskAssessment {
   level: RiskLevel;
   summary: string;
@@ -77,21 +99,36 @@ export interface ExplainableFinding {
     | "Architecture"
     | "Technical Debt"
     | "Testing"
+    | "Secret Hygiene"
     | "Risk";
   title: string;
   summary: string;
   evidence: ExplainableEvidence[];
 }
 
+export interface RemediationItem {
+  id: string;
+  category: ExplainableFinding["category"];
+  priority: "Critical" | "High" | "Medium";
+  effort: "Low" | "Medium" | "High";
+  title: string;
+  summary: string;
+  impact: string;
+  evidence: ExplainableEvidence[];
+  actions: string[];
+}
+
 export interface InvestigationReport {
   caseId: string;
   repository: RepositoryIdentity;
+  scanTarget: ScanTarget;
   aiAssistance: AnalysisScore;
   documentation: DocumentationEvidence;
   maintainability: AnalysisScore;
   architecture: ArchitectureReview;
   technicalDebt: TechnicalDebt;
   testing: TestingReadiness;
+  secretHygiene: SecretHygiene;
   risk: RiskAssessment;
   archetype: RepoArchetype;
   archetypeSummary: string[];
@@ -99,6 +136,7 @@ export interface InvestigationReport {
   generatedAt: string;
   rulePack: RulePackId;
   explainableFindings: ExplainableFinding[];
+  remediationPlan: RemediationItem[];
 }
 
 export interface InvestigationApiResponse {
@@ -117,6 +155,14 @@ export interface HistoricalInvestigation {
   verdictStyle: Verdict["style"];
   generatedAt: string;
   rulePack: RulePackId;
+  metrics: {
+    aiAssistance: number;
+    documentation: number;
+    maintainability: number;
+    technicalDebt: number;
+    testing: number;
+    secretHygiene: number;
+  };
 }
 
 export interface OrganizationSummary {

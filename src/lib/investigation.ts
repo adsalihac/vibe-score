@@ -10,8 +10,12 @@ import {
   type InvestigationReport,
   type RepoArchetype,
   type RepositoryIdentity,
+  type RemediationItem,
   type RiskLevel,
   type RulePackId,
+  type ScanTarget,
+  type ScanTargetMode,
+  type SecretHygiene,
   type TestingReadiness,
 } from "@/types/report";
 import { prisma } from "@/lib/prisma";
@@ -25,6 +29,14 @@ interface GitHubRepoPayload {
   pushed_at: string;
   created_at: string;
   language: string | null;
+}
+
+interface GitHubPullPayload {
+  number: number;
+  title: string;
+  changed_files: number;
+  base: { ref: string; sha: string };
+  head: { ref: string; sha: string };
 }
 
 interface TreeResponse {
@@ -58,6 +70,29 @@ interface RawMetrics {
   staleDays: number;
   topFolders: string[];
   languageBreakdown: string[];
+  trackedEnvFiles: string[];
+  envExampleFiles: string[];
+  envIgnored: boolean;
+  secretPatternCount: number;
+  secretRiskFiles: string[];
+  secretSignalLabels: string[];
+}
+
+interface ParsedRepositoryTarget {
+  owner: string;
+  repo: string;
+  branchRef?: string;
+  pullRequestNumber?: number;
+}
+
+interface InvestigationOptions {
+  rulePack?: RulePackId | string;
+  persist?: boolean;
+  scanTarget?: {
+    mode?: ScanTargetMode;
+    ref?: string;
+    pullRequestNumber?: number | string;
+  };
 }
 
 const LOGS = [
@@ -89,6 +124,21 @@ const CODE_EXTENSIONS = [
   ".cs",
 ];
 
+const SAFE_CONFIG_FILES = [".gitignore", ".env.example", ".env.sample", ".env.template"];
+
+const SECRET_VALUE_PATTERNS = [
+  { label: "GitHub classic token prefix", pattern: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g },
+  { label: "GitHub fine-grained token prefix", pattern: /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g },
+  { label: "AWS access key prefix", pattern: /\bAKIA[0-9A-Z]{16}\b/g },
+  { label: "OpenAI-style key prefix", pattern: /\bsk-[A-Za-z0-9_-]{20,}\b/g },
+  { label: "Private key block", pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----/g },
+  {
+    label: "Secret-like assignment",
+    pattern:
+      /\b(api[_-]?key|secret|token|password|private[_-]?key|client[_-]?secret)\b\s*[:=]\s*["'][^"'\s]{16,}["']/gi,
+  },
+];
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -105,19 +155,43 @@ function formatList(list: string[], fallback: string) {
   return list.length > 0 ? list.join(", ") : fallback;
 }
 
-function parseRepositoryUrl(repoUrl: string) {
+function parseRepositoryUrl(repoUrl: string): ParsedRepositoryTarget {
   const cleaned = repoUrl
     .trim()
     .replace(/^https?:\/\//, "")
     .replace(/^www\./, "")
-    .replace(/\.git$/, "");
+    .split(/[?#]/)[0]
+    .replace(/\/$/, "");
 
-  const match = cleaned.match(/^github\.com\/([^/]+)\/([^/]+)/i);
-  if (!match) {
+  const parts = cleaned.split("/").filter(Boolean);
+  if (parts[0]?.toLowerCase() !== "github.com" || parts.length < 3) {
     throw new Error("Please provide a valid GitHub repository URL.");
   }
 
-  return { owner: match[1], repo: match[2] };
+  const owner = parts[1];
+  const repo = parts[2].replace(/\.git$/i, "");
+  const segment = parts[3]?.toLowerCase();
+
+  if (!owner || !repo) {
+    throw new Error("Please provide a valid GitHub repository URL.");
+  }
+
+  if (segment === "pull" && parts[4]) {
+    const pullRequestNumber = Number.parseInt(parts[4], 10);
+    if (Number.isFinite(pullRequestNumber)) {
+      return { owner, repo, pullRequestNumber };
+    }
+  }
+
+  if (segment === "tree" && parts.length > 4) {
+    return {
+      owner,
+      repo,
+      branchRef: decodeURIComponent(parts.slice(4).join("/")),
+    };
+  }
+
+  return { owner, repo };
 }
 
 function isDatabaseConnectionError(message: string) {
@@ -173,6 +247,99 @@ async function githubRequest<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+function sanitizeGitRef(ref: string) {
+  return ref.trim().replace(/[\r\n\t]/g, "").replace(/^\/+|\/+$/g, "");
+}
+
+function parsePullRequestNumber(input?: number | string) {
+  if (typeof input === "number" && Number.isFinite(input)) {
+    return Math.floor(input);
+  }
+
+  if (typeof input === "string") {
+    const parsed = Number.parseInt(input.trim().replace(/^#/, ""), 10);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+
+  return undefined;
+}
+
+async function fetchBranchSha(owner: string, repo: string, branch: string) {
+  try {
+    const branchPayload = await githubRequest<{ commit: { sha: string } }>(
+      `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
+    );
+    return branchPayload.commit.sha;
+  } catch {
+    return branch;
+  }
+}
+
+async function resolveScanTarget(args: {
+  owner: string;
+  repo: string;
+  defaultBranch: string;
+  parsed: ParsedRepositoryTarget;
+  requested?: InvestigationOptions["scanTarget"];
+}): Promise<ScanTarget> {
+  const { owner, repo, defaultBranch, parsed, requested } = args;
+  const requestedPullNumber = parsePullRequestNumber(requested?.pullRequestNumber);
+  const mode =
+    requested?.mode ??
+    (requestedPullNumber || parsed.pullRequestNumber
+      ? "pull_request"
+      : requested?.ref || parsed.branchRef
+        ? "branch"
+        : "default");
+
+  if (mode === "pull_request") {
+    const pullRequestNumber = requestedPullNumber ?? parsed.pullRequestNumber;
+    if (!pullRequestNumber) {
+      throw new Error("Pull request number is required for PR scans.");
+    }
+
+    const pull = await githubRequest<GitHubPullPayload>(
+      `/repos/${owner}/${repo}/pulls/${pullRequestNumber}`,
+    );
+
+    return {
+      mode,
+      label: `Pull Request #${pull.number}`,
+      ref: pull.head.sha,
+      requestedRef: String(pull.number),
+      baseRef: pull.base.ref,
+      headRef: pull.head.ref,
+      pullRequestNumber: pull.number,
+      pullRequestTitle: pull.title,
+      changedFiles: pull.changed_files,
+    };
+  }
+
+  if (mode === "branch") {
+    const requestedRef = sanitizeGitRef(requested?.ref ?? parsed.branchRef ?? "");
+    if (!requestedRef) {
+      throw new Error("Branch name is required for branch scans.");
+    }
+
+    const ref = await fetchBranchSha(owner, repo, requestedRef);
+    return {
+      mode,
+      label: `Branch ${requestedRef}`,
+      ref,
+      requestedRef,
+      headRef: requestedRef,
+    };
+  }
+
+  return {
+    mode: "default",
+    label: `Default Branch ${defaultBranch}`,
+    ref: defaultBranch,
+    requestedRef: defaultBranch,
+    headRef: defaultBranch,
+  };
+}
+
 async function fetchContributors(owner: string, repo: string) {
   try {
     const contributors = await githubRequest<Array<{ id: number }>>(
@@ -187,13 +354,13 @@ async function fetchContributors(owner: string, repo: string) {
 async function fetchPackageJson(
   owner: string,
   repo: string,
-  branch: string,
+  ref: string,
 ): Promise<Record<string, unknown> | null> {
   try {
     const contentResponse = await githubRequest<{
       content: string;
       encoding: string;
-    }>(`/repos/${owner}/${repo}/contents/package.json?ref=${branch}`);
+    }>(`/repos/${owner}/${repo}/contents/package.json?ref=${encodeURIComponent(ref)}`);
 
     if (contentResponse.encoding !== "base64") {
       return null;
@@ -379,8 +546,34 @@ function buildRawMetrics(args: {
     .slice(0, 10)
     .map((file) => file.path);
 
+  const trackedEnvFiles = fileEntries
+    .filter((file) => {
+      const basename = file.path.split("/").pop()?.toLowerCase() ?? "";
+      return (
+        basename.startsWith(".env") &&
+        ![".env.example", ".env.sample", ".env.template"].includes(basename)
+      );
+    })
+    .slice(0, 8)
+    .map((file) => file.path);
+
+  const envExampleFiles = fileEntries
+    .filter((file) => {
+      const basename = file.path.split("/").pop()?.toLowerCase() ?? "";
+      return [".env.example", ".env.sample", ".env.template"].includes(basename);
+    })
+    .slice(0, 8)
+    .map((file) => file.path);
+
   const readme = files.find((file) => /readme\.md$/i.test(file.path));
+  const gitignore = files.find((file) => file.path.toLowerCase() === ".gitignore");
   const readmeLength = readme?.content.length ?? 0;
+  const envIgnored = gitignore
+    ? gitignore.content
+        .split("\n")
+        .map((line) => line.trim())
+        .some((line) => line === ".env" || line === ".env*" || line.startsWith(".env."))
+    : false;
 
   const longFiles = files.filter((file) => file.content.split("\n").length > 350);
   const longFileCount = longFiles.length;
@@ -406,6 +599,26 @@ function buildRawMetrics(args: {
     : 0;
 
   const { functionCount, importCount, maxNesting, astFilesParsed } = inspectWithAst(files);
+
+  const secretRisk = files.reduce(
+    (state, file) => {
+      const matchedLabels = SECRET_VALUE_PATTERNS.filter(({ pattern }) => {
+        pattern.lastIndex = 0;
+        return pattern.test(file.content);
+      }).map(({ label }) => label);
+
+      if (matchedLabels.length === 0) {
+        return state;
+      }
+
+      return {
+        count: state.count + matchedLabels.length,
+        files: [...state.files, file.path],
+        labels: [...state.labels, ...matchedLabels],
+      };
+    },
+    { count: 0, files: [] as string[], labels: [] as string[] },
+  );
 
   const dependencyCount = packageJson
     ? Object.keys(
@@ -473,6 +686,12 @@ function buildRawMetrics(args: {
     staleDays,
     topFolders,
     languageBreakdown,
+    trackedEnvFiles,
+    envExampleFiles,
+    envIgnored,
+    secretPatternCount: secretRisk.count,
+    secretRiskFiles: [...new Set(secretRisk.files)].slice(0, 8),
+    secretSignalLabels: [...new Set(secretRisk.labels)].slice(0, 8),
   };
 }
 
@@ -607,9 +826,68 @@ function buildTesting(metrics: RawMetrics): TestingReadiness {
   };
 }
 
-function buildRisk(metrics: RawMetrics, debtIndex: number, maintainability: number) {
+function buildSecretHygiene(metrics: RawMetrics): SecretHygiene {
+  const trackedEnvPenalty = metrics.trackedEnvFiles.length * 35;
+  const patternPenalty = metrics.secretPatternCount * 25;
+  const envExamplePenalty = metrics.envExampleFiles.length > 0 ? 0 : 8;
+  const gitignorePenalty = metrics.envIgnored ? 0 : 12;
+  const score = normalizeToScore(
+    92 - trackedEnvPenalty - patternPenalty - envExamplePenalty - gitignorePenalty,
+  );
+
+  const status: SecretHygiene["status"] =
+    metrics.trackedEnvFiles.length > 0 || metrics.secretPatternCount > 0 || score < 60
+      ? "RISK"
+      : score < 80
+        ? "WATCH"
+        : "CLEAR";
+
+  const signals = [
+    metrics.trackedEnvFiles.length > 0
+      ? `${metrics.trackedEnvFiles.length} tracked environment file(s) detected`
+      : "No tracked runtime .env files detected",
+    metrics.envExampleFiles.length > 0
+      ? `Environment template present: ${metrics.envExampleFiles[0]}`
+      : "No .env template detected",
+    metrics.envIgnored ? ".env patterns appear ignored" : ".env ignore rule was not confirmed",
+    metrics.secretPatternCount > 0
+      ? `${metrics.secretPatternCount} secret-like source pattern(s) found`
+      : "No secret-like source values found in sampled files",
+  ];
+
+  const findings = [
+    metrics.trackedEnvFiles.length > 0
+      ? "Remove committed runtime environment files and rotate any exposed credentials."
+      : "Runtime environment files were not found in the repository tree.",
+    metrics.secretPatternCount > 0
+      ? `Potential secret patterns were found in: ${formatList(metrics.secretRiskFiles, "sampled files")}.`
+      : "Sampled source files did not expose recognizable secret tokens.",
+    metrics.envExampleFiles.length > 0
+      ? "Keep template files placeholder-only and document required variables there."
+      : "Add a placeholder-only .env.example so setup does not require real credentials in docs or source.",
+  ];
+
+  const summary =
+    status === "CLEAR"
+      ? "No hardcoded secret values were detected in sampled files, and environment hygiene looks controlled."
+      : status === "WATCH"
+        ? "Secret hygiene is mostly acceptable, but environment conventions need tightening."
+        : "Secret hygiene needs attention. The report only returns paths and counts, not secret values.";
+
+  return { status, score, summary, signals, findings };
+}
+
+function buildRisk(
+  metrics: RawMetrics,
+  debtIndex: number,
+  maintainability: number,
+  secretHygiene: number,
+) {
   const stalePenalty = metrics.staleDays > 365 ? 20 : metrics.staleDays > 120 ? 10 : 0;
-  const riskScore = normalizeToScore(debtIndex * 0.5 + (100 - maintainability) * 0.4 + stalePenalty);
+  const secretPenalty = secretHygiene < 60 ? 18 : secretHygiene < 80 ? 8 : 0;
+  const riskScore = normalizeToScore(
+    debtIndex * 0.45 + (100 - maintainability) * 0.35 + stalePenalty + secretPenalty,
+  );
 
   const level: RiskLevel = riskScore > 70 ? "HIGH" : riskScore > 45 ? "MEDIUM" : "LOW";
 
@@ -631,9 +909,20 @@ function buildExplainableFindings(args: {
   architecture: ArchitectureReview;
   technicalDebt: { debtLevel: RiskLevel; index: number; findings: string[] };
   testing: TestingReadiness;
+  secretHygiene: SecretHygiene;
   risk: { level: RiskLevel; summary: string };
 }): ExplainableFinding[] {
-  const { metrics, ai, documentation, maintainability, architecture, technicalDebt, testing, risk } = args;
+  const {
+    metrics,
+    ai,
+    documentation,
+    maintainability,
+    architecture,
+    technicalDebt,
+    testing,
+    secretHygiene,
+    risk,
+  } = args;
 
   return [
     {
@@ -759,6 +1048,34 @@ function buildExplainableFindings(args: {
       ],
     },
     {
+      id: "secret-hygiene",
+      category: "Secret Hygiene",
+      title: "Secret key exposure scan",
+      summary: secretHygiene.summary,
+      evidence: [
+        {
+          label: "Status",
+          value: `${secretHygiene.status} (${secretHygiene.score}/100)`,
+        },
+        {
+          label: "Tracked env files",
+          value: formatList(metrics.trackedEnvFiles, "No tracked runtime env files."),
+          path: metrics.trackedEnvFiles[0],
+        },
+        {
+          label: "Secret-like patterns",
+          value:
+            metrics.secretPatternCount > 0
+              ? `${metrics.secretPatternCount} pattern(s): ${formatList(
+                  metrics.secretSignalLabels,
+                  "classified signal",
+                )}`
+              : "No token-like values found in sampled files.",
+          path: metrics.secretRiskFiles[0],
+        },
+      ],
+    },
+    {
       id: "risk",
       category: "Risk",
       title: "Risk posture",
@@ -779,6 +1096,209 @@ function buildExplainableFindings(args: {
       ],
     },
   ];
+}
+
+function buildRemediationPlan(args: {
+  metrics: RawMetrics;
+  documentation: DocumentationEvidence;
+  maintainability: AnalysisScore;
+  architecture: ArchitectureReview;
+  technicalDebt: { debtLevel: RiskLevel; index: number; findings: string[] };
+  testing: TestingReadiness;
+  secretHygiene: SecretHygiene;
+  risk: { level: RiskLevel; summary: string };
+}): RemediationItem[] {
+  const {
+    metrics,
+    documentation,
+    maintainability,
+    architecture,
+    technicalDebt,
+    testing,
+    secretHygiene,
+    risk,
+  } = args;
+  const items: RemediationItem[] = [];
+
+  if (secretHygiene.status !== "CLEAR") {
+    items.push({
+      id: "remediate-secret-hygiene",
+      category: "Secret Hygiene",
+      priority: secretHygiene.status === "RISK" ? "Critical" : "High",
+      effort: metrics.trackedEnvFiles.length > 0 ? "Medium" : "Low",
+      title: "Tighten secret and environment hygiene",
+      summary: secretHygiene.summary,
+      impact: "Reduces credential leakage risk and makes onboarding safer.",
+      evidence: [
+        {
+          label: "Secret hygiene",
+          value: `${secretHygiene.score}/100`,
+        },
+        {
+          label: "Path signal",
+          value: formatList(
+            [...metrics.trackedEnvFiles, ...metrics.secretRiskFiles].slice(0, 3),
+            "No risky path captured",
+          ),
+          path: metrics.trackedEnvFiles[0] ?? metrics.secretRiskFiles[0],
+        },
+      ],
+      actions: [
+        "Move real credentials into deployment secrets or local-only environment files.",
+        "Rotate any credential that may have been committed.",
+        "Keep only placeholder values in .env.example, never live keys.",
+      ],
+    });
+  }
+
+  if (testing.coverageConfidence < 65) {
+    items.push({
+      id: "raise-testing-confidence",
+      category: "Testing",
+      priority: testing.coverageConfidence < 45 ? "High" : "Medium",
+      effort: "Medium",
+      title: "Raise testing confidence around core flows",
+      summary: testing.health,
+      impact: "Improves release confidence and makes PR/branch scans more meaningful.",
+      evidence: [
+        {
+          label: "Coverage confidence",
+          value: `${testing.coverageConfidence}%`,
+        },
+        {
+          label: "Detected test paths",
+          value: formatList(metrics.testFilePaths, "No test files detected"),
+          path: metrics.testFilePaths[0],
+        },
+      ],
+      actions: [
+        "Add smoke tests for the main user journey and API routes.",
+        "Add regression tests around scoring and report generation helpers.",
+        "Run the test command in CI before publishing VibeScore badges or summaries.",
+      ],
+    });
+  }
+
+  if (documentation.score < 75) {
+    items.push({
+      id: "improve-docs-evidence",
+      category: "Documentation",
+      priority: documentation.score < 55 ? "High" : "Medium",
+      effort: "Low",
+      title: "Improve documentation evidence",
+      summary: `Documentation is currently scored ${documentation.score} (${documentation.status}).`,
+      impact: "Improves contributor onboarding, audits, and generated organization snapshots.",
+      evidence: [
+        {
+          label: "Documentation flags",
+          value: formatList(metrics.docsFlags, "No strong documentation signals"),
+        },
+        {
+          label: "Doc paths",
+          value: formatList(metrics.docFiles, "No docs files detected"),
+          path: metrics.docFiles[0],
+        },
+      ],
+      actions: [
+        "Add setup, environment, and local development instructions.",
+        "Document expected test and build commands.",
+        "Add examples or screenshots for the primary workflow.",
+      ],
+    });
+  }
+
+  if (
+    technicalDebt.index > 35 ||
+    maintainability.score < 70 ||
+    architecture.grade === "C" ||
+    architecture.grade === "D"
+  ) {
+    items.push({
+      id: "reduce-complexity-hotspots",
+      category: "Technical Debt",
+      priority: technicalDebt.index > 65 || maintainability.score < 55 ? "High" : "Medium",
+      effort: "High",
+      title: "Reduce complexity hotspots",
+      summary: technicalDebt.findings.join(" "),
+      impact: "Improves maintainability score and lowers production-readiness risk.",
+      evidence: [
+        {
+          label: "Debt index",
+          value: `${technicalDebt.index}%`,
+        },
+        {
+          label: "Large files",
+          value: formatList(metrics.longFiles, "No oversized files in sample"),
+          path: metrics.longFiles[0],
+        },
+      ],
+      actions: [
+        "Split oversized files by workflow, domain, or shared helper responsibility.",
+        "Convert repeated logic into local utilities only where duplication is proven.",
+        "Resolve TODO/FIXME/HACK markers that sit on production paths.",
+      ],
+    });
+  }
+
+  if (risk.level !== "LOW") {
+    items.push({
+      id: "stabilize-risk-posture",
+      category: "Risk",
+      priority: risk.level === "HIGH" ? "High" : "Medium",
+      effort: "Medium",
+      title: "Stabilize the risk posture",
+      summary: risk.summary,
+      impact: "Moves the repository toward a safer production-readiness verdict.",
+      evidence: [
+        {
+          label: "Risk level",
+          value: risk.level,
+        },
+        {
+          label: "Last activity",
+          value: `${metrics.staleDays} days since last push`,
+        },
+      ],
+      actions: [
+        "Address the highest-risk finding before adding new product surface.",
+        "Re-scan after fixes and compare against the previous health baseline.",
+        "Use the CI summary endpoint to keep future drift visible.",
+      ],
+    });
+  }
+
+  if (items.length === 0) {
+    items.push({
+      id: "codify-health-gates",
+      category: "Risk",
+      priority: "Medium",
+      effort: "Low",
+      title: "Codify current health as a gate",
+      summary: "The repository is healthy enough that the next move is preserving quality drift.",
+      impact: "Keeps future scans from silently regressing as the product grows.",
+      evidence: [
+        {
+          label: "Current posture",
+          value: "No urgent remediation item generated",
+        },
+      ],
+      actions: [
+        "Add VibeScore CI summary checks to scheduled scans.",
+        "Track health deltas after larger PRs.",
+        "Keep secret hygiene templates placeholder-only.",
+      ],
+    });
+  }
+
+  const priorityRank: Record<RemediationItem["priority"], number> = {
+    Critical: 0,
+    High: 1,
+    Medium: 2,
+  };
+
+  return items
+    .sort((a, b) => priorityRank[a.priority] - priorityRank[b.priority])
+    .slice(0, 5);
 }
 
 function inferArchetype(args: {
@@ -834,23 +1354,31 @@ function buildRepositoryAge(createdAt: string) {
 
 export async function investigateRepository(
   repoUrl: string,
-  options: { rulePack?: RulePackId | string; persist?: boolean } = {},
+  options: InvestigationOptions = {},
 ): Promise<{
   logs: string[];
   report: InvestigationReport;
   persistence?: { enabled: boolean; message?: string };
 }> {
-  const { owner, repo } = parseRepositoryUrl(repoUrl);
+  const parsed = parseRepositoryUrl(repoUrl);
+  const { owner, repo } = parsed;
   const rulePack = resolveRulePack(options.rulePack);
 
   const repoPayload = await githubRequest<GitHubRepoPayload>(`/repos/${owner}/${repo}`);
+  const scanTarget = await resolveScanTarget({
+    owner,
+    repo,
+    defaultBranch: repoPayload.default_branch,
+    parsed,
+    requested: options.scanTarget,
+  });
   const [tree, contributors, packageJson, readmePreview] = await Promise.all([
     githubRequest<TreeResponse>(
-      `/repos/${owner}/${repo}/git/trees/${repoPayload.default_branch}?recursive=1`,
+      `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(scanTarget.ref)}?recursive=1`,
     ),
     fetchContributors(owner, repo),
-    fetchPackageJson(owner, repo, repoPayload.default_branch),
-    fetchFileSample(owner, repo, repoPayload.default_branch, ["README.md"]),
+    fetchPackageJson(owner, repo, scanTarget.ref),
+    fetchFileSample(owner, repo, scanTarget.ref, ["README.md"]),
   ]);
 
   const codePaths = tree.tree
@@ -867,8 +1395,20 @@ export async function investigateRepository(
     .slice(0, 10)
     .map((entry) => entry.path);
 
-  const sampledFiles = await fetchFileSample(owner, repo, repoPayload.default_branch, [
-    ...new Set([...docsPaths, ...codePaths.slice(0, 25)]),
+  const safeConfigPaths = tree.tree
+    .filter((entry) => {
+      if (entry.type !== "blob") {
+        return false;
+      }
+
+      const basename = entry.path.split("/").pop()?.toLowerCase() ?? "";
+      return SAFE_CONFIG_FILES.includes(basename);
+    })
+    .slice(0, 8)
+    .map((entry) => entry.path);
+
+  const sampledFiles = await fetchFileSample(owner, repo, scanTarget.ref, [
+    ...new Set([...safeConfigPaths, ...docsPaths, ...codePaths.slice(0, 25)]),
   ]);
 
   const metrics = buildRawMetrics({
@@ -885,7 +1425,8 @@ export async function investigateRepository(
   const architecture = buildArchitecture(metrics);
   const technicalDebt = buildTechnicalDebt(metrics);
   const testing = buildTesting(metrics);
-  const risk = buildRisk(metrics, technicalDebt.index, maintainability.score);
+  const secretHygiene = buildSecretHygiene(metrics);
+  const risk = buildRisk(metrics, technicalDebt.index, maintainability.score, secretHygiene.score);
   const explainableFindings = buildExplainableFindings({
     metrics,
     ai: aiAssistance,
@@ -894,6 +1435,17 @@ export async function investigateRepository(
     architecture,
     technicalDebt,
     testing,
+    secretHygiene,
+    risk,
+  });
+  const remediationPlan = buildRemediationPlan({
+    metrics,
+    documentation,
+    maintainability,
+    architecture,
+    technicalDebt,
+    testing,
+    secretHygiene,
     risk,
   });
   const archetype = inferArchetype({
@@ -938,12 +1490,14 @@ export async function investigateRepository(
   const report: InvestigationReport = {
     caseId: `VS-${new Date().getFullYear()}-${Math.floor(10000 + Math.random() * 89999)}`,
     repository: repositoryIdentity,
+    scanTarget,
     aiAssistance,
     documentation,
     maintainability,
     architecture,
     technicalDebt,
     testing,
+    secretHygiene,
     risk,
     archetype: archetype.archetype,
     archetypeSummary: archetype.summary,
@@ -961,6 +1515,7 @@ export async function investigateRepository(
     generatedAt: new Date().toISOString(),
     rulePack: rulePack.id,
     explainableFindings,
+    remediationPlan,
   };
 
   let persistence: { enabled: boolean; message?: string } | undefined;

@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
 
 import { investigateRepository } from "@/lib/investigation";
+import { type ScanTargetMode } from "@/types/report";
 
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as {
       repoUrl?: string;
       rulePack?: string;
+      scanTarget?: {
+        mode?: ScanTargetMode;
+        ref?: string;
+        pullRequestNumber?: number | string;
+      };
     };
 
     if (!body.repoUrl) {
@@ -15,6 +21,7 @@ export async function POST(request: Request) {
 
     const result = await investigateRepository(body.repoUrl, {
       rulePack: body.rulePack,
+      scanTarget: body.scanTarget,
     });
 
     const report = result.report;
@@ -22,8 +29,11 @@ export async function POST(request: Request) {
       repository: report.repository.fullName,
       overallHealth: report.verdict.overallHealth,
       risk: report.risk.level,
+      secretHygiene: report.secretHygiene.status,
       verdict: report.verdict.style,
       rulePack: report.rulePack,
+      scanTarget: report.scanTarget.label,
+      topRemediation: report.remediationPlan[0]?.title ?? null,
       generatedAt: report.generatedAt,
     };
 
@@ -32,6 +42,9 @@ export async function POST(request: Request) {
 - **Repository**: ${summary.repository}
 - **Overall Health**: ${summary.overallHealth} / 100
 - **Risk**: ${summary.risk}
+- **Secret Hygiene**: ${summary.secretHygiene}
+- **Scan Target**: ${summary.scanTarget}
+- **Top Remediation**: ${summary.topRemediation ?? "No urgent remediation item"}
 - **Verdict**: ${summary.verdict}
 - **Rule Pack**: ${summary.rulePack}
 - **Generated**: ${new Date(summary.generatedAt).toLocaleString()}`;

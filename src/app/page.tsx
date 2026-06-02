@@ -13,9 +13,15 @@ import {
   Download,
   ExternalLink,
   GitFork,
+  GitPullRequest,
+  KeyRound,
   Link2,
+  ListChecks,
   Share2,
+  ShieldCheck,
   Star,
+  TrendingUp,
+  Wrench,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -29,6 +35,7 @@ import {
   type InvestigationReport,
   type OrganizationSummary,
   type RulePackId,
+  type ScanTargetMode,
 } from "@/types/report";
 
 const INVESTIGATION_LOGS = [
@@ -82,6 +89,9 @@ export default function Home() {
   const [orgSummary, setOrgSummary] = useState<OrganizationSummary | null>(null);
   const [persistenceNote, setPersistenceNote] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<"daily" | "weekly" | "monthly">("weekly");
+  const [scanScope, setScanScope] = useState<ScanTargetMode>("default");
+  const [branchRef, setBranchRef] = useState("");
+  const [pullRequestNumber, setPullRequestNumber] = useState("");
   const reportCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -128,6 +138,105 @@ export default function Home() {
     () => new Set(["Technical Debt", "Risk Tier"]),
     [],
   );
+
+  const riskRank = useMemo(
+    () => ({
+      LOW: 1,
+      MEDIUM: 2,
+      HIGH: 3,
+    }),
+    [],
+  );
+
+  const previousScan = useMemo(() => {
+    if (!report) {
+      return null;
+    }
+
+    return history.find((item) => item.caseId !== report.caseId) ?? null;
+  }, [history, report]);
+
+  const trendDeltas = useMemo(() => {
+    if (!report || !previousScan) {
+      return [];
+    }
+
+    return [
+      {
+        metric: "Overall Health",
+        previous: previousScan.overallHealth,
+        current: report.verdict.overallHealth,
+      },
+      {
+        metric: "Documentation",
+        previous: previousScan.metrics.documentation,
+        current: report.documentation.score,
+      },
+      {
+        metric: "Maintainability",
+        previous: previousScan.metrics.maintainability,
+        current: report.maintainability.score,
+      },
+      {
+        metric: "Technical Debt",
+        previous: previousScan.metrics.technicalDebt,
+        current: report.technicalDebt.index,
+      },
+      {
+        metric: "Testing Confidence",
+        previous: previousScan.metrics.testing,
+        current: report.testing.coverageConfidence,
+      },
+      {
+        metric: "Secret Hygiene",
+        previous: previousScan.metrics.secretHygiene,
+        current: report.secretHygiene.score,
+      },
+      {
+        metric: "Risk Tier",
+        previous: riskRank[previousScan.riskLevel],
+        current: riskRank[report.risk.level],
+      },
+    ].map((item) => ({
+      ...item,
+      delta: item.current - item.previous,
+    }));
+  }, [previousScan, report, riskRank]);
+
+  const ciPayload = useMemo(() => {
+    if (!report) {
+      return "{}";
+    }
+
+    const payload: {
+      repoUrl: string;
+      rulePack: RulePackId;
+      scanTarget?: {
+        mode: ScanTargetMode;
+        ref?: string;
+        pullRequestNumber?: number;
+      };
+    } = {
+      repoUrl: `https://github.com/${report.repository.fullName}`,
+      rulePack: report.rulePack,
+    };
+
+    if (report.scanTarget.mode === "branch") {
+      payload.scanTarget = {
+        mode: "branch",
+        ref: report.scanTarget.requestedRef ?? report.scanTarget.headRef,
+      };
+    }
+
+    if (report.scanTarget.mode === "pull_request") {
+      payload.scanTarget = {
+        mode: "pull_request",
+        pullRequestNumber: report.scanTarget.pullRequestNumber,
+      };
+    }
+
+    return JSON.stringify(payload);
+  }, [report]);
 
   const runLogAnimation = () => {
     setLogs([]);
@@ -194,6 +303,16 @@ export default function Home() {
       return;
     }
 
+    if (scanScope === "branch" && !branchRef.trim()) {
+      setError("Please enter the branch name to scan.");
+      return;
+    }
+
+    if (scanScope === "pull_request" && !pullRequestNumber.trim()) {
+      setError("Please enter the pull request number to scan.");
+      return;
+    }
+
     setError(null);
     setReport(null);
     setComparison(null);
@@ -210,7 +329,16 @@ export default function Home() {
       const response = await fetch("/api/investigate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoUrl, rulePack }),
+        body: JSON.stringify({
+          repoUrl,
+          rulePack,
+          scanTarget:
+            scanScope === "default"
+              ? { mode: "default" }
+              : scanScope === "branch"
+                ? { mode: "branch", ref: branchRef }
+                : { mode: "pull_request", pullRequestNumber },
+        }),
       });
 
       const data = (await response.json()) as InvestigationApiResponse | { error: string };
@@ -371,7 +499,20 @@ export default function Home() {
 
   const copyPublicLink = async () => {
     const url = window.location.origin;
-    await navigator.clipboard.writeText(url);
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url);
+      return;
+    }
+
+    const textarea = document.createElement("textarea");
+    textarea.value = url;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
   };
 
   const shareOnX = () => {
@@ -437,7 +578,7 @@ export default function Home() {
             </Button>
           </div>
 
-          <div className="mt-6 grid gap-3 md:grid-cols-[1.2fr_1fr]">
+          <div className="mt-6 grid gap-3 lg:grid-cols-3">
             <div className="rounded-md border border-[var(--border)] bg-black/20 p-4">
               <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
                 Rule Pack
@@ -466,6 +607,42 @@ export default function Home() {
                   </span>
                 ))}
               </div>
+            </div>
+            <div className="rounded-md border border-[var(--border)] bg-black/20 p-4">
+              <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
+                Scan Scope
+              </p>
+              <select
+                className="mt-2 w-full rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-sm text-[var(--foreground)]"
+                value={scanScope}
+                onChange={(event) => setScanScope(event.target.value as ScanTargetMode)}
+                disabled={mode === "compare" || isSubmitting}
+              >
+                <option value="default">Default branch</option>
+                <option value="branch">Branch</option>
+                <option value="pull_request">Pull request</option>
+              </select>
+              {mode === "single" && scanScope === "branch" ? (
+                <Input
+                  value={branchRef}
+                  onChange={(event) => setBranchRef(event.target.value)}
+                  placeholder="feature/refactor-score"
+                  className="mt-2 text-xs"
+                />
+              ) : null}
+              {mode === "single" && scanScope === "pull_request" ? (
+                <Input
+                  value={pullRequestNumber}
+                  onChange={(event) => setPullRequestNumber(event.target.value)}
+                  placeholder="42"
+                  className="mt-2 text-xs"
+                />
+              ) : null}
+              {mode === "compare" ? (
+                <p className="mt-2 text-xs text-[var(--muted)]">
+                  Compare mode uses repository defaults.
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -695,7 +872,20 @@ export default function Home() {
                 {statLabel("Last Activity", report.repository.lastActivity)}
                 {statLabel("Dependency Count", report.repository.dependencyCount)}
                 {statLabel("Rule Pack", report.rulePack)}
+                {statLabel("Scan Target", report.scanTarget.label)}
               </div>
+              {report.scanTarget.mode === "pull_request" ? (
+                <div className="mt-4 rounded-md border border-[var(--border)] bg-black/20 p-3 text-xs text-[var(--muted)]">
+                  <div className="flex items-center gap-2 text-[var(--foreground)]">
+                    <GitPullRequest className="h-3.5 w-3.5 text-[var(--accent-secondary)]" />
+                    PR #{report.scanTarget.pullRequestNumber}: {report.scanTarget.pullRequestTitle}
+                  </div>
+                  <p className="mt-2">
+                    {report.scanTarget.baseRef} → {report.scanTarget.headRef} / Changed files:{" "}
+                    {report.scanTarget.changedFiles ?? "unknown"}
+                  </p>
+                </div>
+              ) : null}
             </Panel>
 
             <div className="grid gap-6 xl:grid-cols-2">
@@ -773,6 +963,27 @@ export default function Home() {
                 <p className="mt-3 text-sm text-[var(--muted)]">Frameworks: {report.testing.frameworks.join(", ")}</p>
                 <p className="mt-3 text-sm leading-relaxed text-[var(--muted)]">{report.testing.health}</p>
               </Panel>
+
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-[var(--accent-secondary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Secret Hygiene Review</h3>
+                </div>
+                <p className={`mt-3 text-4xl font-bold ${scoreTint(report.secretHygiene.score)}`}>
+                  {report.secretHygiene.score}
+                </p>
+                <p className="mono mt-1 text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                  Status: {report.secretHygiene.status}
+                </p>
+                <p className="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                  {report.secretHygiene.summary}
+                </p>
+                <div className="mt-4 space-y-2 text-xs text-zinc-200">
+                  {report.secretHygiene.signals.map((signal) => (
+                    <p key={signal}>- {signal}</p>
+                  ))}
+                </div>
+              </Panel>
             </div>
 
             <div className="grid gap-6 lg:grid-cols-2">
@@ -816,6 +1027,54 @@ export default function Home() {
             </Panel>
 
             <Panel>
+              <div className="flex items-center gap-2">
+                <Wrench className="h-4 w-4 text-[var(--accent-primary)]" />
+                <h3 className="text-lg font-semibold uppercase">Remediation Plan</h3>
+              </div>
+              <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                {report.remediationPlan.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-[var(--border)] bg-black/25 p-4">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span
+                        className={`rounded-md border px-2 py-1 text-[0.65rem] uppercase tracking-[0.14em] ${
+                          item.priority === "Critical"
+                            ? "border-[var(--danger)]/60 text-[var(--danger)]"
+                            : item.priority === "High"
+                              ? "border-[var(--accent-secondary)]/60 text-[var(--accent-secondary)]"
+                              : "border-[var(--border)] text-[var(--muted)]"
+                        }`}
+                      >
+                        {item.priority}
+                      </span>
+                      <span className="rounded-md border border-[var(--border)] px-2 py-1 text-[0.65rem] uppercase tracking-[0.14em] text-[var(--muted)]">
+                        {item.effort} effort
+                      </span>
+                    </div>
+                    <p className="mt-3 text-sm font-semibold text-[var(--foreground)]">{item.title}</p>
+                    <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">{item.summary}</p>
+                    <p className="mt-3 text-xs text-zinc-200">Impact: {item.impact}</p>
+                    <div className="mt-3 space-y-2 text-xs text-[var(--muted)]">
+                      {item.actions.map((action) => (
+                        <p key={action}>- {action}</p>
+                      ))}
+                    </div>
+                    <div className="mt-3 border-t border-[var(--border)] pt-3 text-xs text-zinc-200">
+                      {item.evidence.map((evidence) => (
+                        <div key={`${item.id}-${evidence.label}`} className="mt-2 first:mt-0">
+                          <span className="text-[var(--muted)]">{evidence.label}: </span>
+                          <span>{evidence.value}</span>
+                          {evidence.path ? (
+                            <span className="ml-1 text-[var(--accent-secondary)]">{evidence.path}</span>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+
+            <Panel>
               <h3 className="text-lg font-semibold uppercase">Shareable Report Card</h3>
               <div className="mt-4 grid gap-5 lg:grid-cols-[1.4fr_1fr]">
                 <div
@@ -830,6 +1089,9 @@ VIBESCORE REPORT
 Repository:
 ${report.repository.fullName}
 
+Scan Target:
+${report.scanTarget.label}
+
 Health Score:
 ${report.verdict.overallHealth}
 
@@ -841,6 +1103,12 @@ ${report.documentation.score}
 
 Maintainability:
 ${report.maintainability.score}
+
+Secret Hygiene:
+${report.secretHygiene.status} / ${report.secretHygiene.score}
+
+Top Remediation:
+${report.remediationPlan[0]?.title ?? "No urgent remediation"}
 
 Verdict:
 ${report.verdict.style}
@@ -922,12 +1190,57 @@ ${report.verdict.style}
 
             <div className="grid gap-6 lg:grid-cols-2">
               <Panel>
-                <h3 className="text-lg font-semibold uppercase">Historical Trend Scans</h3>
+                <div className="flex items-center gap-2">
+                  <TrendingUp className="h-4 w-4 text-[var(--accent-primary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Historical Trend Scans</h3>
+                </div>
                 {persistenceNote ? (
                   <div className="mt-3 rounded-md border border-[var(--danger)]/40 bg-[var(--danger)]/10 px-3 py-2 text-xs text-[var(--danger)]">
                     {persistenceNote}
                   </div>
                 ) : null}
+                {previousScan ? (
+                  <div className="mt-4 rounded-lg border border-[var(--border)] bg-black/25 p-4">
+                    <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
+                      Delta since {new Date(previousScan.generatedAt).toLocaleDateString()}
+                    </p>
+                    <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                      {trendDeltas.map((delta) => {
+                        const lowerIsBetter = negativeComparisonMetrics.has(delta.metric);
+                        const improved = delta.delta === 0 ? null : lowerIsBetter ? delta.delta < 0 : delta.delta > 0;
+                        return (
+                          <div
+                            key={delta.metric}
+                            className="rounded-md border border-[var(--border)] bg-black/20 p-3 text-xs"
+                          >
+                            <p className="text-[var(--muted)]">{delta.metric}</p>
+                            <div className="mt-1 flex items-center justify-between gap-2">
+                              <span className="text-[var(--foreground)]">
+                                {delta.previous} → {delta.current}
+                              </span>
+                              <span
+                                className={
+                                  improved === null
+                                    ? "text-[var(--muted)]"
+                                    : improved
+                                      ? "text-[var(--accent-primary)]"
+                                      : "text-[var(--danger)]"
+                                }
+                              >
+                                {delta.delta > 0 ? "+" : ""}
+                                {delta.delta}
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-xs text-[var(--muted)]">
+                    No previous baseline yet. Run another scan to see deltas.
+                  </p>
+                )}
                 <div className="mt-4 space-y-3 text-xs text-[var(--muted)]">
                   {history.length === 0 ? (
                     <p>No prior scans stored yet.</p>
@@ -982,7 +1295,10 @@ ${report.verdict.style}
 
             <div className="grid gap-6 lg:grid-cols-2">
               <Panel>
-                <h3 className="text-lg font-semibold uppercase">CI / GitHub App Integration</h3>
+                <div className="flex items-center gap-2">
+                  <ListChecks className="h-4 w-4 text-[var(--accent-secondary)]" />
+                  <h3 className="text-lg font-semibold uppercase">CI / GitHub App Integration</h3>
+                </div>
                 <p className="mt-3 text-xs text-[var(--muted)]">
                   Use the CI summary endpoint or a scheduled GitHub Actions workflow to keep scans fresh.
                 </p>
@@ -1015,13 +1331,16 @@ jobs:
         run: |
           curl -X POST "$VIBESCORE_URL/api/ci-summary" \\
             -H "Content-Type: application/json" \\
-            -d '{\"repoUrl\":\"https://github.com/${report.repository.fullName}\",\"rulePack\":\"${report.rulePack}\"}'`}
+            -d '${ciPayload}'`}
                   </pre>
                 </div>
               </Panel>
 
               <Panel>
-                <h3 className="text-lg font-semibold uppercase">Public Badge</h3>
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-[var(--accent-primary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Public Badge</h3>
+                </div>
                 <p className="mt-3 text-xs text-[var(--muted)]">
                   Embed the latest health score badge in README or dashboards.
                 </p>

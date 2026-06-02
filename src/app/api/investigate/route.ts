@@ -1,10 +1,19 @@
 import { NextResponse } from "next/server";
 
 import { investigateRepository } from "@/lib/investigation";
+import { type ScanTargetMode } from "@/types/report";
 
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { repoUrl?: string; rulePack?: string };
+    const body = (await request.json()) as {
+      repoUrl?: string;
+      rulePack?: string;
+      scanTarget?: {
+        mode?: ScanTargetMode;
+        ref?: string;
+        pullRequestNumber?: number | string;
+      };
+    };
 
     if (!body.repoUrl) {
       return NextResponse.json(
@@ -15,6 +24,7 @@ export async function POST(request: Request) {
 
     const result = await investigateRepository(body.repoUrl, {
       rulePack: body.rulePack,
+      scanTarget: body.scanTarget,
     });
     return NextResponse.json(result);
   } catch (error) {
