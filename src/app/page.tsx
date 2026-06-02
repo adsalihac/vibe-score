@@ -1354,7 +1354,7 @@ jobs:
                     className="h-8 w-auto"
                   />
                   <pre className="whitespace-pre-wrap rounded-md border border-[var(--border)] bg-black/40 p-3 text-[0.65rem] text-[#bcffe8]">
-{`![VibeScore](/api/badge?repo=${report.repository.fullName})`}
+{`![VibeScore](${typeof window !== "undefined" ? window.location.origin : ""}/api/badge?repo=${encodeURIComponent(report.repository.fullName)})`}
                   </pre>
                 </div>
               </Panel>

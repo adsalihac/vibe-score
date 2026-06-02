@@ -9,6 +9,12 @@ function escapeXml(s: string) {
   );
 }
 
+const CORS_HEADERS: HeadersInit = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
 function buildBadgeSvg(health: number | undefined): Response {
   const value = health !== undefined ? `Health ${health}` : "Scan required";
   const color =
@@ -42,8 +48,16 @@ function buildBadgeSvg(health: number | undefined): Response {
 </svg>`;
 
   return new Response(svg, {
-    headers: { "Content-Type": "image/svg+xml", "Cache-Control": "no-store" },
+    headers: {
+      "Content-Type": "image/svg+xml",
+      "Cache-Control": "no-cache, s-maxage=300, stale-while-revalidate=600",
+      ...CORS_HEADERS,
+    },
   });
+}
+
+export function OPTIONS() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
 export async function GET(request: Request) {
@@ -52,7 +66,10 @@ export async function GET(request: Request) {
     const repo = searchParams.get("repo");
 
     if (!repo) {
-      return new Response("Missing repo parameter.", { status: 400 });
+      return new Response("Missing repo parameter.", {
+        status: 400,
+        headers: CORS_HEADERS,
+      });
     }
 
     if (!process.env.DATABASE_URL) {
@@ -66,7 +83,8 @@ export async function GET(request: Request) {
 
     const payload = latest?.payload as Partial<InvestigationReport> | null;
     return buildBadgeSvg(payload?.verdict?.overallHealth);
-  } catch {
+  } catch (error) {
+    console.error("[badge] Failed to fetch badge data:", error);
     return buildBadgeSvg(undefined);
   }
 }
