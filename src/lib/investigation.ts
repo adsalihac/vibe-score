@@ -93,6 +93,7 @@ interface InvestigationOptions {
     ref?: string;
     pullRequestNumber?: number | string;
   };
+  token?: string;
 }
 
 const LOGS = [
@@ -206,8 +207,9 @@ function isDatabaseConnectionError(message: string) {
   );
 }
 
-async function githubRequest<T>(path: string): Promise<T> {
-  const token = process.env.GIT_TOKEN || process.env.GH_TOKEN;
+async function githubRequest<T>(path: string, customToken?: string): Promise<T> {
+  const token = customToken || process.env.GIT_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  console.log(`[GitHub API] Requesting path: ${path} | Token present: ${!!token} (length: ${token?.length ?? 0})`);
   const response = await fetch(`https://api.github.com${path}`, {
     headers: {
       Accept: "application/vnd.github+json",
@@ -264,10 +266,11 @@ function parsePullRequestNumber(input?: number | string) {
   return undefined;
 }
 
-async function fetchBranchSha(owner: string, repo: string, branch: string) {
+async function fetchBranchSha(owner: string, repo: string, branch: string, token?: string) {
   try {
     const branchPayload = await githubRequest<{ commit: { sha: string } }>(
       `/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`,
+      token,
     );
     return branchPayload.commit.sha;
   } catch {
@@ -275,13 +278,16 @@ async function fetchBranchSha(owner: string, repo: string, branch: string) {
   }
 }
 
-async function resolveScanTarget(args: {
-  owner: string;
-  repo: string;
-  defaultBranch: string;
-  parsed: ParsedRepositoryTarget;
-  requested?: InvestigationOptions["scanTarget"];
-}): Promise<ScanTarget> {
+async function resolveScanTarget(
+  args: {
+    owner: string;
+    repo: string;
+    defaultBranch: string;
+    parsed: ParsedRepositoryTarget;
+    requested?: InvestigationOptions["scanTarget"];
+  },
+  token?: string,
+): Promise<ScanTarget> {
   const { owner, repo, defaultBranch, parsed, requested } = args;
   const requestedPullNumber = parsePullRequestNumber(requested?.pullRequestNumber);
   const mode =
@@ -300,6 +306,7 @@ async function resolveScanTarget(args: {
 
     const pull = await githubRequest<GitHubPullPayload>(
       `/repos/${owner}/${repo}/pulls/${pullRequestNumber}`,
+      token,
     );
 
     return {
@@ -321,7 +328,7 @@ async function resolveScanTarget(args: {
       throw new Error("Branch name is required for branch scans.");
     }
 
-    const ref = await fetchBranchSha(owner, repo, requestedRef);
+    const ref = await fetchBranchSha(owner, repo, requestedRef, token);
     return {
       mode,
       label: `Branch ${requestedRef}`,
@@ -340,10 +347,11 @@ async function resolveScanTarget(args: {
   };
 }
 
-async function fetchContributors(owner: string, repo: string) {
+async function fetchContributors(owner: string, repo: string, token?: string) {
   try {
     const contributors = await githubRequest<Array<{ id: number }>>(
       `/repos/${owner}/${repo}/contributors?per_page=100`,
+      token,
     );
     return contributors.length;
   } catch {
@@ -355,12 +363,16 @@ async function fetchPackageJson(
   owner: string,
   repo: string,
   ref: string,
+  token?: string,
 ): Promise<Record<string, unknown> | null> {
   try {
     const contentResponse = await githubRequest<{
       content: string;
       encoding: string;
-    }>(`/repos/${owner}/${repo}/contents/package.json?ref=${encodeURIComponent(ref)}`);
+    }>(
+      `/repos/${owner}/${repo}/contents/package.json?ref=${encodeURIComponent(ref)}`,
+      token,
+    );
 
     if (contentResponse.encoding !== "base64") {
       return null;
@@ -433,15 +445,41 @@ async function fetchFileSample(
   repo: string,
   branch: string,
   paths: string[],
+  customToken?: string,
 ) {
+  const token = customToken || process.env.GIT_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   const sampleTargets = paths.slice(0, 25);
+  console.log(`[GitHub API] fetchFileSample for ${owner}/${repo} (branch: ${branch}) | Paths to sample: ${sampleTargets.length} | Token present: ${!!token} (length: ${token?.length ?? 0})`);
   const files = await Promise.all(
     sampleTargets.map(async (path): Promise<FileSample | null> => {
       try {
-        const response = await fetch(
-          `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`,
-          { next: { revalidate: 0 } },
-        );
+        let response: Response;
+        if (token) {
+          // Use GitHub REST API with raw format to support private repositories
+          const encodedPath = path
+            .split("/")
+            .map(encodeURIComponent)
+            .join("/");
+          response = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(
+              branch
+            )}`,
+            {
+              headers: {
+                Accept: "application/vnd.github.v3.raw",
+                Authorization: `Bearer ${token}`,
+              },
+              next: { revalidate: 0 },
+            }
+          );
+        } else {
+          // Fall back to raw.githubusercontent.com for public repositories without token
+          response = await fetch(
+            `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`,
+            { next: { revalidate: 0 } },
+          );
+        }
+
         if (!response.ok) {
           return null;
         }
@@ -1363,22 +1401,24 @@ export async function investigateRepository(
   const parsed = parseRepositoryUrl(repoUrl);
   const { owner, repo } = parsed;
   const rulePack = resolveRulePack(options.rulePack);
+  const customToken = options.token;
 
-  const repoPayload = await githubRequest<GitHubRepoPayload>(`/repos/${owner}/${repo}`);
+  const repoPayload = await githubRequest<GitHubRepoPayload>(`/repos/${owner}/${repo}`, customToken);
   const scanTarget = await resolveScanTarget({
     owner,
     repo,
     defaultBranch: repoPayload.default_branch,
     parsed,
     requested: options.scanTarget,
-  });
+  }, customToken);
   const [tree, contributors, packageJson, readmePreview] = await Promise.all([
     githubRequest<TreeResponse>(
       `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(scanTarget.ref)}?recursive=1`,
+      customToken,
     ),
-    fetchContributors(owner, repo),
-    fetchPackageJson(owner, repo, scanTarget.ref),
-    fetchFileSample(owner, repo, scanTarget.ref, ["README.md"]),
+    fetchContributors(owner, repo, customToken),
+    fetchPackageJson(owner, repo, scanTarget.ref, customToken),
+    fetchFileSample(owner, repo, scanTarget.ref, ["README.md"], customToken),
   ]);
 
   const codePaths = tree.tree
@@ -1409,7 +1449,7 @@ export async function investigateRepository(
 
   const sampledFiles = await fetchFileSample(owner, repo, scanTarget.ref, [
     ...new Set([...safeConfigPaths, ...docsPaths, ...codePaths.slice(0, 25)]),
-  ]);
+  ], customToken);
 
   const metrics = buildRawMetrics({
     repo: repoPayload,

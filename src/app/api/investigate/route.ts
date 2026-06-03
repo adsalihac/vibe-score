@@ -5,9 +5,16 @@ import { type ScanTargetMode } from "@/types/report";
 
 export async function POST(request: Request) {
   try {
+    const authHeader = request.headers.get("Authorization") || request.headers.get("x-github-token");
+    let headerToken: string | undefined;
+    if (authHeader) {
+      headerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+    }
+
     const body = (await request.json()) as {
       repoUrl?: string;
       rulePack?: string;
+      githubToken?: string;
       scanTarget?: {
         mode?: ScanTargetMode;
         ref?: string;
@@ -22,9 +29,12 @@ export async function POST(request: Request) {
       );
     }
 
+    const customToken = body.githubToken || headerToken;
+
     const result = await investigateRepository(body.repoUrl, {
       rulePack: body.rulePack,
       scanTarget: body.scanTarget,
+      token: customToken,
     });
     return NextResponse.json(result);
   } catch (error) {

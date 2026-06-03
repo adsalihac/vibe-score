@@ -55,10 +55,17 @@ function buildComparison(left: InvestigationReport, right: InvestigationReport):
 
 export async function POST(request: Request) {
   try {
+    const authHeader = request.headers.get("Authorization") || request.headers.get("x-github-token");
+    let headerToken: string | undefined;
+    if (authHeader) {
+      headerToken = authHeader.replace(/^Bearer\s+/i, "").trim();
+    }
+
     const body = (await request.json()) as {
       leftRepoUrl?: string;
       rightRepoUrl?: string;
       rulePack?: string;
+      githubToken?: string;
     };
 
     if (!body.leftRepoUrl || !body.rightRepoUrl) {
@@ -68,9 +75,11 @@ export async function POST(request: Request) {
       );
     }
 
+    const customToken = body.githubToken || headerToken;
+
     const [leftResult, rightResult] = await Promise.all([
-      investigateRepository(body.leftRepoUrl, { rulePack: body.rulePack }),
-      investigateRepository(body.rightRepoUrl, { rulePack: body.rulePack }),
+      investigateRepository(body.leftRepoUrl, { rulePack: body.rulePack, token: customToken }),
+      investigateRepository(body.rightRepoUrl, { rulePack: body.rulePack, token: customToken }),
     ]);
 
     const comparison = buildComparison(leftResult.report, rightResult.report);

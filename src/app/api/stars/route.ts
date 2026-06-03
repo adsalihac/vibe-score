@@ -43,7 +43,7 @@ async function fetchStarsFromShields(owner: string, repo: string): Promise<numbe
 }
 
 async function fetchStarsFromGitHub(owner: string, repo: string): Promise<number | null> {
-  const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
+  const token = process.env.GIT_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   const response = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
     headers: {
       Accept: "application/vnd.github+json",

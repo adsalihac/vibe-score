@@ -92,7 +92,22 @@ export default function Home() {
   const [scanScope, setScanScope] = useState<ScanTargetMode>("default");
   const [branchRef, setBranchRef] = useState("");
   const [pullRequestNumber, setPullRequestNumber] = useState("");
+  const [githubToken, setGithubToken] = useState("");
   const reportCardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const savedToken = localStorage.getItem("vibescore_github_token") ?? "";
+    if (savedToken) {
+      setTimeout(() => {
+        setGithubToken(savedToken);
+      }, 0);
+    }
+  }, []);
+
+  const handleTokenChange = (val: string) => {
+    setGithubToken(val);
+    localStorage.setItem("vibescore_github_token", val);
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -332,6 +347,7 @@ export default function Home() {
         body: JSON.stringify({
           repoUrl,
           rulePack,
+          githubToken: githubToken || undefined,
           scanTarget:
             scanScope === "default"
               ? { mode: "default" }
@@ -400,6 +416,7 @@ export default function Home() {
           leftRepoUrl: repoUrl,
           rightRepoUrl: compareRepoUrl,
           rulePack,
+          githubToken: githubToken || undefined,
         }),
       });
 
@@ -663,6 +680,26 @@ export default function Home() {
                 />
               ) : null}
             </div>
+
+            <details className="group border border-[var(--border)] rounded-md bg-black/10 overflow-hidden">
+              <summary className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)] cursor-pointer select-none px-4 py-2.5 hover:text-[var(--accent-secondary)] transition-colors">
+                Advanced: Scan Private Repositories (Optional)
+              </summary>
+              <div className="p-4 border-t border-[var(--border)] bg-black/20 flex flex-col gap-3">
+                <p className="text-xs text-[var(--muted)] leading-relaxed">
+                  Provide your GitHub Personal Access Token (PAT) to analyze private repositories. 
+                  The token is only sent securely for this request and is never stored on our database.
+                </p>
+                <Input
+                  type="password"
+                  value={githubToken}
+                  onChange={(event) => handleTokenChange(event.target.value)}
+                  placeholder="ghp_... or github_pat_..."
+                  className="text-xs"
+                />
+              </div>
+            </details>
+
             <div className="flex flex-col gap-3 md:flex-row">
               <Button
                 onClick={mode === "compare" ? handleComparison : handleInvestigation}
