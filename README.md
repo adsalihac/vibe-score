@@ -1,5 +1,7 @@
 # VibeScore
 
+![VibeScore repository forensics banner](public/vibescore-banner.png)
+
 VibeScore is a cinematic developer product that investigates GitHub repositories and generates a forensic investigation report instead of a traditional analytics dashboard.
 
 ## Overview
