@@ -72,6 +72,41 @@ export interface SecretHygiene {
   findings: string[];
 }
 
+export type DependencyFeatureNeed = "Critical" | "Medium" | "Low";
+
+export type DependencyRiskAction = "Keep" | "Monitor" | "Update" | "Replace" | "Remove";
+
+export interface DependencyRiskItem {
+  name: string;
+  version: string;
+  ecosystem: string;
+  scope: string;
+  featureNeed: DependencyFeatureNeed;
+  riskLevel: RiskLevel;
+  action: DependencyRiskAction;
+  manifestPath?: string;
+  usedInFiles: string[];
+  signals: string[];
+}
+
+export interface DependencyRiskReview {
+  score: number;
+  level: RiskLevel;
+  summary: string;
+  manifestFiles: string[];
+  lockfileStatus: "LOCKED" | "PARTIAL" | "MISSING";
+  totalDependencies: number;
+  directDependencies: number;
+  devDependencies: number;
+  transitiveDependencies: number;
+  highRiskCount: number;
+  mediumRiskCount: number;
+  unusedDirectCount: number;
+  findings: string[];
+  topRisks: DependencyRiskItem[];
+  recommendations: string[];
+}
+
 export interface RiskAssessment {
   level: RiskLevel;
   summary: string;
@@ -100,6 +135,7 @@ export interface ExplainableFinding {
     | "Technical Debt"
     | "Testing"
     | "Secret Hygiene"
+    | "Dependency Risk"
     | "Risk";
   title: string;
   summary: string;
@@ -129,6 +165,7 @@ export interface InvestigationReport {
   technicalDebt: TechnicalDebt;
   testing: TestingReadiness;
   secretHygiene: SecretHygiene;
+  dependencyRisk: DependencyRiskReview;
   risk: RiskAssessment;
   archetype: RepoArchetype;
   archetypeSummary: string[];
@@ -162,6 +199,7 @@ export interface HistoricalInvestigation {
     technicalDebt: number;
     testing: number;
     secretHygiene: number;
+    dependencyRisk: number;
   };
 }
 

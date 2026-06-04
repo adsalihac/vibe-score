@@ -5,6 +5,10 @@ import traverse from "@babel/traverse";
 import {
   type AnalysisScore,
   type ArchitectureReview,
+  type DependencyFeatureNeed,
+  type DependencyRiskAction,
+  type DependencyRiskItem,
+  type DependencyRiskReview,
   type DocumentationEvidence,
   type ExplainableFinding,
   type InvestigationReport,
@@ -100,6 +104,7 @@ const LOGS = [
   "[✓] Accessing repository",
   "[✓] Reading file structure",
   "[✓] Building dependency graph",
+  "[✓] Assessing dependency risk",
   "[✓] Inspecting commit history",
   "[✓] Detecting generation patterns",
   "[✓] Evaluating architecture",
@@ -126,6 +131,105 @@ const CODE_EXTENSIONS = [
 ];
 
 const SAFE_CONFIG_FILES = [".gitignore", ".env.example", ".env.sample", ".env.template"];
+
+const DEPENDENCY_MANIFEST_FILES = new Set([
+  "package.json",
+  "requirements.txt",
+  "pyproject.toml",
+  "pipfile",
+  "go.mod",
+  "cargo.toml",
+  "composer.json",
+  "gemfile",
+  "pom.xml",
+  "build.gradle",
+  "build.gradle.kts",
+]);
+
+const DEPENDENCY_LOCK_FILES = new Set([
+  "package-lock.json",
+  "npm-shrinkwrap.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "pipfile.lock",
+  "poetry.lock",
+  "go.sum",
+  "cargo.lock",
+  "composer.lock",
+  "gemfile.lock",
+]);
+
+const SENSITIVE_DEPENDENCY_PATTERNS = [
+  /auth/i,
+  /passport/i,
+  /session/i,
+  /jwt/i,
+  /oauth/i,
+  /stripe/i,
+  /payment/i,
+  /paypal/i,
+  /crypto/i,
+  /bcrypt/i,
+  /argon/i,
+  /secret/i,
+  /vault/i,
+  /^pg$/i,
+  /postgres/i,
+  /mysql/i,
+  /mongodb/i,
+  /redis/i,
+  /prisma/i,
+  /^aws-/i,
+  /azure/i,
+  /google-cloud/i,
+  /firebase/i,
+];
+
+const CORE_DEPENDENCY_PATTERNS = [
+  /^next$/i,
+  /^react$/i,
+  /^react-dom$/i,
+  /express/i,
+  /fastify/i,
+  /nestjs/i,
+  /django/i,
+  /flask/i,
+  /rails/i,
+  /spring/i,
+  /laravel/i,
+  /vue/i,
+  /angular/i,
+  /svelte/i,
+  /remix/i,
+  /vite/i,
+  /webpack/i,
+  /babel/i,
+  /typescript/i,
+];
+
+const TOOLING_DEPENDENCY_PATTERNS = [
+  /^@types\//i,
+  /eslint/i,
+  /prettier/i,
+  /jest/i,
+  /vitest/i,
+  /mocha/i,
+  /playwright/i,
+  /cypress/i,
+  /storybook/i,
+  /tailwind/i,
+  /postcss/i,
+  /nodemon/i,
+  /ts-node/i,
+];
+
+interface DependencyDeclaration {
+  name: string;
+  version: string;
+  ecosystem: string;
+  scope: string;
+  manifestPath?: string;
+}
 
 const SECRET_VALUE_PATTERNS = [
   { label: "GitHub classic token prefix", pattern: /\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g },
@@ -446,9 +550,10 @@ async function fetchFileSample(
   branch: string,
   paths: string[],
   customToken?: string,
+  limit = 25,
 ) {
   const token = customToken || process.env.GIT_TOKEN || process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-  const sampleTargets = paths.slice(0, 25);
+  const sampleTargets = paths.slice(0, limit);
   console.log(`[GitHub API] fetchFileSample for ${owner}/${repo} (branch: ${branch}) | Paths to sample: ${sampleTargets.length} | Token present: ${!!token} (length: ${token?.length ?? 0})`);
   const files = await Promise.all(
     sampleTargets.map(async (path): Promise<FileSample | null> => {
@@ -915,26 +1020,612 @@ function buildSecretHygiene(metrics: RawMetrics): SecretHygiene {
   return { status, score, summary, signals, findings };
 }
 
+function getDependencyFilePaths(tree: TreeResponse) {
+  return tree.tree
+    .filter((entry) => {
+      if (entry.type !== "blob") {
+        return false;
+      }
+
+      const basename = entry.path.split("/").pop()?.toLowerCase() ?? "";
+      return DEPENDENCY_MANIFEST_FILES.has(basename) || DEPENDENCY_LOCK_FILES.has(basename);
+    })
+    .filter((entry) => (entry.size ?? 0) < 800000)
+    .sort((a, b) => {
+      const aDepth = a.path.split("/").length;
+      const bDepth = b.path.split("/").length;
+      return aDepth - bDepth || a.path.localeCompare(b.path);
+    })
+    .slice(0, 40)
+    .map((entry) => entry.path);
+}
+
+function dependencyFileBasename(path: string) {
+  return path.split("/").pop()?.toLowerCase() ?? path.toLowerCase();
+}
+
+function normalizeDependencyVersion(value: unknown) {
+  if (typeof value === "string") {
+    return value.trim() || "unknown";
+  }
+
+  if (typeof value === "object" && value && "version" in value) {
+    const version = (value as { version?: unknown }).version;
+    return typeof version === "string" ? version.trim() || "unknown" : "unknown";
+  }
+
+  return "unknown";
+}
+
+function collectPackageJsonDependencies(
+  manifestPath: string,
+  packageJson: Record<string, unknown>,
+): DependencyDeclaration[] {
+  const sections: Array<[string, string]> = [
+    ["dependencies", "production"],
+    ["devDependencies", "development"],
+    ["optionalDependencies", "optional"],
+    ["peerDependencies", "peer"],
+  ];
+
+  return sections.flatMap(([section, scope]) => {
+    const dependencies = packageJson[section];
+    if (!dependencies || typeof dependencies !== "object") {
+      return [];
+    }
+
+    return Object.entries(dependencies as Record<string, unknown>).map(([name, version]) => ({
+      name,
+      version: normalizeDependencyVersion(version),
+      ecosystem: "npm",
+      scope,
+      manifestPath,
+    }));
+  });
+}
+
+function parseRequirementsTxt(path: string, content: string): DependencyDeclaration[] {
+  return content
+    .split("\n")
+    .map((line) => line.replace(/#.*/, "").trim())
+    .filter((line) => line && !line.startsWith("-") && !/^https?:\/\//i.test(line))
+    .map((line) => {
+      const match = line.match(/^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*([<>=!~].*)?$/);
+      if (!match) {
+        return null;
+      }
+
+      return {
+        name: match[1],
+        version: match[2]?.trim() ?? "unpinned",
+        ecosystem: "pypi",
+        scope: "production",
+        manifestPath: path,
+      };
+    })
+    .filter((item): item is DependencyDeclaration => !!item);
+}
+
+function parsePyprojectToml(path: string, content: string): DependencyDeclaration[] {
+  const declarations: DependencyDeclaration[] = [];
+  const dependencyArrays = content.matchAll(/dependencies\s*=\s*\[([\s\S]*?)\]/g);
+
+  for (const match of dependencyArrays) {
+    for (const dependency of match[1].matchAll(/["']([^"']+)["']/g)) {
+      declarations.push(...parseRequirementsTxt(path, dependency[1]));
+    }
+  }
+
+  const poetryBlock = content.match(/\[tool\.poetry\.dependencies\]([\s\S]*?)(?:\n\[|$)/);
+  if (poetryBlock) {
+    for (const rawLine of poetryBlock[1].split("\n")) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#") || line.toLowerCase().startsWith("python")) {
+        continue;
+      }
+
+      const match = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/);
+      if (match) {
+        declarations.push({
+          name: match[1],
+          version: match[2].replace(/["']/g, "").trim(),
+          ecosystem: "pypi",
+          scope: "production",
+          manifestPath: path,
+        });
+      }
+    }
+  }
+
+  return declarations;
+}
+
+function parseGoMod(path: string, content: string): DependencyDeclaration[] {
+  const declarations: DependencyDeclaration[] = [];
+  const requireBlock = content.match(/require\s*\(([\s\S]*?)\)/);
+  const lines = [
+    ...content.matchAll(/^require\s+([^\s]+)\s+([^\s]+)/gm),
+  ].map((match) => `${match[1]} ${match[2]}`);
+
+  if (requireBlock) {
+    lines.push(
+      ...requireBlock[1]
+        .split("\n")
+        .map((line) => line.replace(/\/\/.*$/, "").trim())
+        .filter(Boolean),
+    );
+  }
+
+  for (const line of lines) {
+    const match = line.match(/^([^\s]+)\s+([^\s]+)/);
+    if (!match) {
+      continue;
+    }
+
+    declarations.push({
+      name: match[1],
+      version: match[2],
+      ecosystem: "go",
+      scope: "production",
+      manifestPath: path,
+    });
+  }
+
+  return declarations;
+}
+
+function parseCargoToml(path: string, content: string): DependencyDeclaration[] {
+  const declarations: DependencyDeclaration[] = [];
+  const blocks = content.matchAll(/\[(dependencies|dev-dependencies|build-dependencies)\]([\s\S]*?)(?=\n\[|$)/g);
+
+  for (const block of blocks) {
+    const scope = block[1] === "dev-dependencies" ? "development" : block[1] === "build-dependencies" ? "build" : "production";
+    for (const rawLine of block[2].split("\n")) {
+      const line = rawLine.replace(/#.*/, "").trim();
+      const match = line.match(/^([A-Za-z0-9_-]+)\s*=\s*(.+)$/);
+      if (!match) {
+        continue;
+      }
+
+      declarations.push({
+        name: match[1],
+        version: normalizeDependencyVersion(match[2].match(/version\s*=\s*["']([^"']+)["']/)?.[1] ?? match[2].replace(/["']/g, "")),
+        ecosystem: "cargo",
+        scope,
+        manifestPath: path,
+      });
+    }
+  }
+
+  return declarations;
+}
+
+function parseComposerJson(path: string, content: string): DependencyDeclaration[] {
+  try {
+    const json = JSON.parse(content) as Record<string, unknown>;
+    return [
+      ...Object.entries((json.require as Record<string, unknown> | undefined) ?? {}).map(([name, version]) => ({
+        name,
+        version: normalizeDependencyVersion(version),
+        ecosystem: "composer",
+        scope: "production",
+        manifestPath: path,
+      })),
+      ...Object.entries((json["require-dev"] as Record<string, unknown> | undefined) ?? {}).map(([name, version]) => ({
+        name,
+        version: normalizeDependencyVersion(version),
+        ecosystem: "composer",
+        scope: "development",
+        manifestPath: path,
+      })),
+    ].filter((dependency) => dependency.name.toLowerCase() !== "php");
+  } catch {
+    return [];
+  }
+}
+
+function parseGemfile(path: string, content: string): DependencyDeclaration[] {
+  return [...content.matchAll(/^\s*gem\s+["']([^"']+)["']\s*(?:,\s*["']([^"']+)["'])?/gm)].map((match) => ({
+    name: match[1],
+    version: match[2] ?? "unpinned",
+    ecosystem: "rubygems",
+    scope: "production",
+    manifestPath: path,
+  }));
+}
+
+function parsePomXml(path: string, content: string): DependencyDeclaration[] {
+  return [...content.matchAll(/<dependency>([\s\S]*?)<\/dependency>/g)].map((match) => {
+    const groupId = match[1].match(/<groupId>(.*?)<\/groupId>/)?.[1]?.trim();
+    const artifactId = match[1].match(/<artifactId>(.*?)<\/artifactId>/)?.[1]?.trim();
+    const version = match[1].match(/<version>(.*?)<\/version>/)?.[1]?.trim() ?? "managed";
+    const scope = match[1].match(/<scope>(.*?)<\/scope>/)?.[1]?.trim() ?? "production";
+
+    return {
+      name: [groupId, artifactId].filter(Boolean).join(":"),
+      version,
+      ecosystem: "maven",
+      scope,
+      manifestPath: path,
+    };
+  }).filter((dependency) => dependency.name);
+}
+
+function parseGradle(path: string, content: string): DependencyDeclaration[] {
+  return [...content.matchAll(/\b(implementation|api|compileOnly|runtimeOnly|testImplementation|testRuntimeOnly)\s*\(?\s*["']([^:"']+):([^:"']+):([^"']+)["']/g)].map((match) => ({
+    name: `${match[2]}:${match[3]}`,
+    version: match[4],
+    ecosystem: "gradle",
+    scope: match[1].toLowerCase().includes("test") ? "development" : "production",
+    manifestPath: path,
+  }));
+}
+
+function parseDependencyDeclarations(
+  dependencyFiles: FileSample[],
+  rootPackageJson: Record<string, unknown> | null,
+): DependencyDeclaration[] {
+  const declarations: DependencyDeclaration[] = [];
+  let sawRootPackageJson = false;
+
+  for (const file of dependencyFiles) {
+    const basename = dependencyFileBasename(file.path);
+
+    if (basename === "package.json") {
+      try {
+        const json = JSON.parse(file.content) as Record<string, unknown>;
+        declarations.push(...collectPackageJsonDependencies(file.path, json));
+        sawRootPackageJson = sawRootPackageJson || file.path === "package.json";
+      } catch {
+        continue;
+      }
+    }
+
+    if (basename === "requirements.txt") declarations.push(...parseRequirementsTxt(file.path, file.content));
+    if (basename === "pyproject.toml") declarations.push(...parsePyprojectToml(file.path, file.content));
+    if (basename === "go.mod") declarations.push(...parseGoMod(file.path, file.content));
+    if (basename === "cargo.toml") declarations.push(...parseCargoToml(file.path, file.content));
+    if (basename === "composer.json") declarations.push(...parseComposerJson(file.path, file.content));
+    if (basename === "gemfile") declarations.push(...parseGemfile(file.path, file.content));
+    if (basename === "pom.xml") declarations.push(...parsePomXml(file.path, file.content));
+    if (basename === "build.gradle" || basename === "build.gradle.kts") declarations.push(...parseGradle(file.path, file.content));
+  }
+
+  if (rootPackageJson && !sawRootPackageJson) {
+    declarations.push(...collectPackageJsonDependencies("package.json", rootPackageJson));
+  }
+
+  const unique = new Map<string, DependencyDeclaration>();
+  for (const declaration of declarations) {
+    const key = `${declaration.ecosystem}:${declaration.name}:${declaration.scope}:${declaration.manifestPath ?? ""}`;
+    if (!unique.has(key)) {
+      unique.set(key, declaration);
+    }
+  }
+
+  return [...unique.values()];
+}
+
+function lockfileEcosystem(path: string) {
+  const basename = dependencyFileBasename(path);
+  if (["package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock"].includes(basename)) return "npm";
+  if (["pipfile.lock", "poetry.lock"].includes(basename)) return "pypi";
+  if (basename === "go.sum") return "go";
+  if (basename === "cargo.lock") return "cargo";
+  if (basename === "composer.lock") return "composer";
+  if (basename === "gemfile.lock") return "rubygems";
+  return null;
+}
+
+function countTransitiveDependencies(dependencyFiles: FileSample[]) {
+  let count = 0;
+
+  for (const file of dependencyFiles) {
+    const basename = dependencyFileBasename(file.path);
+    try {
+      if (basename === "package-lock.json" || basename === "npm-shrinkwrap.json") {
+        const json = JSON.parse(file.content) as { packages?: Record<string, unknown>; dependencies?: Record<string, unknown> };
+        count += json.packages
+          ? Object.keys(json.packages).filter((key) => key.startsWith("node_modules/")).length
+          : Object.keys(json.dependencies ?? {}).length;
+      } else if (basename === "composer.lock") {
+        const json = JSON.parse(file.content) as { packages?: unknown[]; "packages-dev"?: unknown[] };
+        count += (json.packages?.length ?? 0) + (json["packages-dev"]?.length ?? 0);
+      } else if (basename === "pipfile.lock") {
+        const json = JSON.parse(file.content) as { default?: Record<string, unknown>; develop?: Record<string, unknown> };
+        count += Object.keys(json.default ?? {}).length + Object.keys(json.develop ?? {}).length;
+      } else if (basename === "cargo.lock") {
+        count += (file.content.match(/^\[\[package\]\]/gm) ?? []).length;
+      } else if (basename === "go.sum") {
+        count += new Set(file.content.split("\n").map((line) => line.split(" ")[0]).filter(Boolean)).size;
+      } else if (basename === "gemfile.lock") {
+        count += (file.content.match(/^    [A-Za-z0-9_.-]+ \(/gm) ?? []).length;
+      } else if (basename === "poetry.lock") {
+        count += (file.content.match(/^\[\[package\]\]/gm) ?? []).length;
+      } else if (basename === "pnpm-lock.yaml" || basename === "yarn.lock") {
+        count += (file.content.match(/^\s{2,}[^\s].+@/gm) ?? []).length;
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return count;
+}
+
+function hasPatternMatch(name: string, patterns: RegExp[]) {
+  return patterns.some((pattern) => pattern.test(name));
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function findDependencyUsage(dependency: DependencyDeclaration, files: FileSample[]) {
+  const escapedName = escapeRegExp(dependency.name);
+  const packageRoot = dependency.name.startsWith("@")
+    ? dependency.name.split("/").slice(0, 2).join("/")
+    : dependency.name.split("/")[0];
+  const escapedRoot = escapeRegExp(packageRoot);
+  const pythonName = escapeRegExp(dependency.name.replace(/[-.]/g, "_"));
+  const rustName = escapeRegExp(dependency.name.replace(/-/g, "_"));
+
+  const patterns = dependency.ecosystem === "pypi"
+    ? [new RegExp(`\\bfrom\\s+${pythonName}\\b`), new RegExp(`\\bimport\\s+${pythonName}\\b`)]
+    : dependency.ecosystem === "cargo"
+      ? [new RegExp(`\\buse\\s+${rustName}::`), new RegExp(`\\bextern\\s+crate\\s+${rustName}\\b`)]
+      : [
+          new RegExp(`from\\s+["']${escapedRoot}(?:/[^"']*)?["']`),
+          new RegExp(`require\\(\\s*["']${escapedRoot}(?:/[^"']*)?["']`),
+          new RegExp(`import\\(\\s*["']${escapedRoot}(?:/[^"']*)?["']`),
+          new RegExp(`["']${escapedName}["']`),
+        ];
+
+  return files
+    .filter((file) => patterns.some((pattern) => pattern.test(file.content)))
+    .map((file) => file.path)
+    .slice(0, 3);
+}
+
+function classifyFeatureNeed(dependency: DependencyDeclaration, usedInFiles: string[]): DependencyFeatureNeed {
+  const name = dependency.name;
+  const isTooling = dependency.scope === "development" || hasPatternMatch(name, TOOLING_DEPENDENCY_PATTERNS);
+
+  if (isTooling) {
+    return "Low";
+  }
+
+  if (hasPatternMatch(name, CORE_DEPENDENCY_PATTERNS) || hasPatternMatch(name, SENSITIVE_DEPENDENCY_PATTERNS)) {
+    return "Critical";
+  }
+
+  return usedInFiles.length > 0 ? "Medium" : "Low";
+}
+
+function versionRiskSignals(version: string) {
+  const normalized = version.trim().toLowerCase();
+  const signals: string[] = [];
+  let score = 0;
+
+  if (!normalized || normalized === "unknown" || normalized === "unpinned") {
+    signals.push("No pinned version was found in the manifest.");
+    score += 2;
+  }
+
+  if (["*", "latest", "x"].includes(normalized)) {
+    signals.push("Version range is fully floating.");
+    score += 3;
+  }
+
+  if (/^(git\+|github:|https?:|file:|link:|workspace:)/i.test(version)) {
+    signals.push("Dependency resolves from a non-registry or workspace source.");
+    score += 3;
+  }
+
+  if (/^[>=~^]/.test(version) && !/^[~^]\d/.test(version)) {
+    signals.push("Version allows broad updates without a clear upper bound.");
+    score += 2;
+  } else if (/^[~^]/.test(version)) {
+    signals.push("Version allows semver-range updates; lockfile coverage matters.");
+  }
+
+  return { signals, score };
+}
+
+function buildDependencyRiskItem(args: {
+  dependency: DependencyDeclaration;
+  usedInFiles: string[];
+  hasLockfile: boolean;
+}): DependencyRiskItem {
+  const { dependency, usedInFiles, hasLockfile } = args;
+  const featureNeed = classifyFeatureNeed(dependency, usedInFiles);
+  const versionRisk = versionRiskSignals(dependency.version);
+  const signals = [...versionRisk.signals];
+  let riskPoints = versionRisk.score;
+
+  if (!hasLockfile && dependency.scope !== "development") {
+    signals.push("No lockfile was found for this dependency ecosystem.");
+    riskPoints += 2;
+  }
+
+  if (hasPatternMatch(dependency.name, SENSITIVE_DEPENDENCY_PATTERNS)) {
+    signals.push("Dependency touches sensitive data, identity, payment, persistence, or infrastructure flows.");
+    riskPoints += 1;
+  }
+
+  if (usedInFiles.length === 0 && dependency.scope === "production" && featureNeed !== "Critical") {
+    signals.push("No direct usage was found in sampled source files.");
+    riskPoints += 1;
+  } else if (usedInFiles.length > 0) {
+    signals.push(`Used in sampled file: ${usedInFiles[0]}`);
+  }
+
+  if (featureNeed === "Critical") {
+    signals.push("Feature need is critical for core runtime or high-impact workflows.");
+  }
+
+  const riskLevel: RiskLevel = riskPoints >= 5 ? "HIGH" : riskPoints >= 2 ? "MEDIUM" : "LOW";
+  const action: DependencyRiskAction =
+    riskLevel === "HIGH" && featureNeed === "Low" && usedInFiles.length === 0
+      ? "Remove"
+      : riskLevel === "HIGH"
+        ? "Replace"
+        : riskLevel === "MEDIUM" && versionRisk.score > 0
+          ? "Update"
+          : riskLevel === "MEDIUM"
+            ? "Monitor"
+            : "Keep";
+
+  return {
+    name: dependency.name,
+    version: dependency.version,
+    ecosystem: dependency.ecosystem,
+    scope: dependency.scope,
+    featureNeed,
+    riskLevel,
+    action,
+    manifestPath: dependency.manifestPath,
+    usedInFiles,
+    signals: signals.length > 0 ? signals : ["No dependency-specific risk signal found in static review."],
+  };
+}
+
+function buildDependencyRisk(args: {
+  packageJson: Record<string, unknown> | null;
+  dependencyFiles: FileSample[];
+  sampledFiles: FileSample[];
+}): DependencyRiskReview {
+  const { packageJson, dependencyFiles, sampledFiles } = args;
+  const manifestFiles = dependencyFiles
+    .filter((file) => DEPENDENCY_MANIFEST_FILES.has(dependencyFileBasename(file.path)))
+    .map((file) => file.path);
+  const lockfiles = dependencyFiles.filter((file) => DEPENDENCY_LOCK_FILES.has(dependencyFileBasename(file.path)));
+  const declarations = parseDependencyDeclarations(dependencyFiles, packageJson);
+  const ecosystems = new Set(declarations.map((dependency) => dependency.ecosystem));
+  const lockedEcosystems = new Set(lockfiles.map((file) => lockfileEcosystem(file.path)).filter((item): item is string => !!item));
+  const lockfileStatus: DependencyRiskReview["lockfileStatus"] =
+    declarations.length === 0 || ecosystems.size === 0
+      ? "LOCKED"
+      : lockedEcosystems.size === 0
+        ? "MISSING"
+        : [...ecosystems].every((ecosystem) => lockedEcosystems.has(ecosystem))
+          ? "LOCKED"
+          : "PARTIAL";
+
+  const items = declarations.map((dependency) =>
+    buildDependencyRiskItem({
+      dependency,
+      usedInFiles: findDependencyUsage(dependency, sampledFiles),
+      hasLockfile: lockedEcosystems.has(dependency.ecosystem),
+    }),
+  );
+
+  const directDependencies = declarations.length;
+  const devDependencies = declarations.filter((dependency) => dependency.scope === "development").length;
+  const transitiveDependencies = Math.max(0, countTransitiveDependencies(dependencyFiles) - directDependencies);
+  const highRiskCount = items.filter((item) => item.riskLevel === "HIGH").length;
+  const mediumRiskCount = items.filter((item) => item.riskLevel === "MEDIUM").length;
+  const unusedDirectCount = items.filter(
+    (item) => item.usedInFiles.length === 0 && item.scope === "production" && item.featureNeed !== "Critical",
+  ).length;
+  const totalDependencies = directDependencies + transitiveDependencies;
+  const lockPenalty = lockfileStatus === "MISSING" && directDependencies > 0 ? 18 : lockfileStatus === "PARTIAL" ? 9 : 0;
+  const volumePenalty = totalDependencies > 250 ? 15 : totalDependencies > 100 ? 9 : directDependencies > 60 ? 5 : 0;
+  const score = normalizeToScore(
+    100 - highRiskCount * 12 - mediumRiskCount * 5 - unusedDirectCount * 2 - lockPenalty - volumePenalty,
+  );
+  const level: RiskLevel = score < 60 ? "HIGH" : score < 80 ? "MEDIUM" : "LOW";
+  const topRisks = items
+    .filter((item) => item.riskLevel !== "LOW" || item.action !== "Keep")
+    .sort((a, b) => {
+      const riskRank: Record<RiskLevel, number> = { HIGH: 0, MEDIUM: 1, LOW: 2 };
+      const needRank: Record<DependencyFeatureNeed, number> = { Critical: 0, Medium: 1, Low: 2 };
+      return riskRank[a.riskLevel] - riskRank[b.riskLevel] || needRank[a.featureNeed] - needRank[b.featureNeed];
+    })
+    .slice(0, 6);
+
+  const findings = [
+    manifestFiles.length > 0
+      ? `${manifestFiles.length} dependency manifest file(s) reviewed.`
+      : "No supported dependency manifest was found in the repository tree.",
+    lockfileStatus === "LOCKED"
+      ? "Lockfile coverage is present for detected dependency ecosystems."
+      : lockfileStatus === "PARTIAL"
+        ? "Only partial lockfile coverage was found across dependency ecosystems."
+        : "No lockfile coverage was found for detected dependency ecosystems.",
+    `${highRiskCount} high-risk and ${mediumRiskCount} medium-risk dependency signal(s) detected.`,
+    unusedDirectCount > 0
+      ? `${unusedDirectCount} production dependency/dependencies were not found in sampled source usage.`
+      : "No sampled production dependency usage gaps were detected.",
+  ];
+
+  const recommendations = [
+    lockfileStatus === "MISSING"
+      ? "Commit the package manager lockfile so third-party resolution is reproducible."
+      : "Keep lockfiles updated through reviewed dependency upgrade PRs.",
+    highRiskCount > 0
+      ? "Prioritize high-risk dependencies before adding new feature surface."
+      : "Monitor dependency drift as part of regular repo verification.",
+    unusedDirectCount > 0
+      ? "Confirm low-need dependencies with no sampled usage and remove any that are no longer required."
+      : "Keep feature justification attached to critical third-party services and runtime packages.",
+  ];
+
+  const summary =
+    directDependencies === 0
+      ? "No third-party dependency manifests were detected for static dependency-risk review."
+      : level === "LOW"
+        ? "Third-party dependencies look controlled, with manageable supply-chain and feature-fit risk."
+        : level === "MEDIUM"
+          ? "Dependency posture needs monitoring due to lockfile, version, usage, or sensitive-flow signals."
+          : "Dependency posture is risky; high-impact third-party packages need review before verification is trusted.";
+
+  return {
+    score,
+    level,
+    summary,
+    manifestFiles,
+    lockfileStatus,
+    totalDependencies,
+    directDependencies,
+    devDependencies,
+    transitiveDependencies,
+    highRiskCount,
+    mediumRiskCount,
+    unusedDirectCount,
+    findings,
+    topRisks,
+    recommendations,
+  };
+}
+
 function buildRisk(
   metrics: RawMetrics,
   debtIndex: number,
   maintainability: number,
   secretHygiene: number,
+  dependencyRisk: DependencyRiskReview,
 ) {
   const stalePenalty = metrics.staleDays > 365 ? 20 : metrics.staleDays > 120 ? 10 : 0;
   const secretPenalty = secretHygiene < 60 ? 18 : secretHygiene < 80 ? 8 : 0;
+  const dependencyPenalty =
+    dependencyRisk.level === "HIGH" ? 18 : dependencyRisk.level === "MEDIUM" ? 8 : 0;
   const riskScore = normalizeToScore(
-    debtIndex * 0.45 + (100 - maintainability) * 0.35 + stalePenalty + secretPenalty,
+    debtIndex * 0.42 +
+      (100 - maintainability) * 0.3 +
+      stalePenalty +
+      secretPenalty +
+      dependencyPenalty,
   );
 
   const level: RiskLevel = riskScore > 70 ? "HIGH" : riskScore > 45 ? "MEDIUM" : "LOW";
 
   const summary =
     level === "LOW"
-      ? "No critical architectural concerns detected from sampled repository evidence."
+      ? "No critical architectural, secret, or dependency concerns detected from sampled repository evidence."
       : level === "MEDIUM"
-        ? "Moderate risk profile due to complexity concentration or duplication signals."
-        : "Elevated risk profile detected with significant complexity, debt, or stale maintenance patterns.";
+        ? "Moderate risk profile due to complexity, secret hygiene, dependency, or duplication signals."
+        : "Elevated risk profile detected with significant complexity, debt, dependency, secret, or stale maintenance patterns.";
 
   return { level, summary };
 }
@@ -948,6 +1639,7 @@ function buildExplainableFindings(args: {
   technicalDebt: { debtLevel: RiskLevel; index: number; findings: string[] };
   testing: TestingReadiness;
   secretHygiene: SecretHygiene;
+  dependencyRisk: DependencyRiskReview;
   risk: { level: RiskLevel; summary: string };
 }): ExplainableFinding[] {
   const {
@@ -959,6 +1651,7 @@ function buildExplainableFindings(args: {
     technicalDebt,
     testing,
     secretHygiene,
+    dependencyRisk,
     risk,
   } = args;
 
@@ -1114,6 +1807,30 @@ function buildExplainableFindings(args: {
       ],
     },
     {
+      id: "dependency-risk",
+      category: "Dependency Risk",
+      title: "Third-party dependency review",
+      summary: dependencyRisk.summary,
+      evidence: [
+        {
+          label: "Dependency score",
+          value: `${dependencyRisk.score}/100 (${dependencyRisk.level})`,
+        },
+        {
+          label: "Manifest files",
+          value: formatList(dependencyRisk.manifestFiles, "No supported dependency manifests detected."),
+          path: dependencyRisk.manifestFiles[0],
+        },
+        {
+          label: "Top dependency action",
+          value: dependencyRisk.topRisks[0]
+            ? `${dependencyRisk.topRisks[0].action} ${dependencyRisk.topRisks[0].name}`
+            : "No dependency-specific remediation required.",
+          path: dependencyRisk.topRisks[0]?.manifestPath,
+        },
+      ],
+    },
+    {
       id: "risk",
       category: "Risk",
       title: "Risk posture",
@@ -1144,6 +1861,7 @@ function buildRemediationPlan(args: {
   technicalDebt: { debtLevel: RiskLevel; index: number; findings: string[] };
   testing: TestingReadiness;
   secretHygiene: SecretHygiene;
+  dependencyRisk: DependencyRiskReview;
   risk: { level: RiskLevel; summary: string };
 }): RemediationItem[] {
   const {
@@ -1154,6 +1872,7 @@ function buildRemediationPlan(args: {
     technicalDebt,
     testing,
     secretHygiene,
+    dependencyRisk,
     risk,
   } = args;
   const items: RemediationItem[] = [];
@@ -1275,6 +1994,32 @@ function buildRemediationPlan(args: {
         "Convert repeated logic into local utilities only where duplication is proven.",
         "Resolve TODO/FIXME/HACK markers that sit on production paths.",
       ],
+    });
+  }
+
+  if (dependencyRisk.level !== "LOW" || dependencyRisk.highRiskCount > 0) {
+    items.push({
+      id: "review-third-party-dependencies",
+      category: "Dependency Risk",
+      priority: dependencyRisk.level === "HIGH" || dependencyRisk.highRiskCount > 0 ? "High" : "Medium",
+      effort: dependencyRisk.highRiskCount > 0 || dependencyRisk.lockfileStatus === "MISSING" ? "Medium" : "Low",
+      title: "Review third-party dependency risk",
+      summary: dependencyRisk.summary,
+      impact: "Reduces supply-chain, license, vendor, and feature-fit risk before verification is trusted.",
+      evidence: [
+        {
+          label: "Dependency score",
+          value: `${dependencyRisk.score}/100`,
+        },
+        {
+          label: "Top risk",
+          value: dependencyRisk.topRisks[0]
+            ? `${dependencyRisk.topRisks[0].name} (${dependencyRisk.topRisks[0].action})`
+            : "No single high-risk dependency isolated",
+          path: dependencyRisk.topRisks[0]?.manifestPath,
+        },
+      ],
+      actions: dependencyRisk.recommendations,
     });
   }
 
@@ -1421,6 +2166,8 @@ export async function investigateRepository(
     fetchFileSample(owner, repo, scanTarget.ref, ["README.md"], customToken),
   ]);
 
+  const dependencyPaths = getDependencyFilePaths(tree);
+
   const codePaths = tree.tree
     .filter(
       (entry) =>
@@ -1447,16 +2194,21 @@ export async function investigateRepository(
     .slice(0, 8)
     .map((entry) => entry.path);
 
-  const sampledFiles = await fetchFileSample(owner, repo, scanTarget.ref, [
-    ...new Set([...safeConfigPaths, ...docsPaths, ...codePaths.slice(0, 25)]),
-  ], customToken);
+  const [dependencyFiles, sampledFiles] = await Promise.all([
+    fetchFileSample(owner, repo, scanTarget.ref, dependencyPaths, customToken, 40),
+    fetchFileSample(owner, repo, scanTarget.ref, [
+      ...new Set([...safeConfigPaths, ...docsPaths, ...codePaths.slice(0, 25)]),
+    ], customToken),
+  ]);
+
+  const allSampledFiles = [...readmePreview, ...sampledFiles];
 
   const metrics = buildRawMetrics({
     repo: repoPayload,
     tree,
     contributors,
     packageJson,
-    files: [...readmePreview, ...sampledFiles],
+    files: allSampledFiles,
   });
 
   const aiAssistance = buildAiAssistance(metrics);
@@ -1466,7 +2218,12 @@ export async function investigateRepository(
   const technicalDebt = buildTechnicalDebt(metrics);
   const testing = buildTesting(metrics);
   const secretHygiene = buildSecretHygiene(metrics);
-  const risk = buildRisk(metrics, technicalDebt.index, maintainability.score, secretHygiene.score);
+  const dependencyRisk = buildDependencyRisk({
+    packageJson,
+    dependencyFiles,
+    sampledFiles: allSampledFiles,
+  });
+  const risk = buildRisk(metrics, technicalDebt.index, maintainability.score, secretHygiene.score, dependencyRisk);
   const explainableFindings = buildExplainableFindings({
     metrics,
     ai: aiAssistance,
@@ -1476,6 +2233,7 @@ export async function investigateRepository(
     technicalDebt,
     testing,
     secretHygiene,
+    dependencyRisk,
     risk,
   });
   const remediationPlan = buildRemediationPlan({
@@ -1486,6 +2244,7 @@ export async function investigateRepository(
     technicalDebt,
     testing,
     secretHygiene,
+    dependencyRisk,
     risk,
   });
   const archetype = inferArchetype({
@@ -1524,7 +2283,7 @@ export async function investigateRepository(
     contributors: metrics.contributors,
     repositoryAge: buildRepositoryAge(repoPayload.created_at),
     lastActivity: new Date(repoPayload.pushed_at).toISOString().slice(0, 10),
-    dependencyCount: metrics.dependencyCount,
+    dependencyCount: dependencyRisk.directDependencies || metrics.dependencyCount,
   };
 
   const report: InvestigationReport = {
@@ -1538,6 +2297,7 @@ export async function investigateRepository(
     technicalDebt,
     testing,
     secretHygiene,
+    dependencyRisk,
     risk,
     archetype: archetype.archetype,
     archetypeSummary: archetype.summary,

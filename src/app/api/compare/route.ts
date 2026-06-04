@@ -28,6 +28,7 @@ function buildComparison(left: InvestigationReport, right: InvestigationReport):
     buildDelta("Maintainability", left.maintainability.score, right.maintainability.score),
     buildDelta("Technical Debt", left.technicalDebt.index, right.technicalDebt.index),
     buildDelta("Testing Confidence", left.testing.coverageConfidence, right.testing.coverageConfidence),
+    buildDelta("Dependency Risk", left.dependencyRisk.score, right.dependencyRisk.score),
     buildDelta("Risk Tier", riskRank[left.risk.level], riskRank[right.risk.level]),
   ];
 

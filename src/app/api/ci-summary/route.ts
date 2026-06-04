@@ -40,6 +40,7 @@ export async function POST(request: Request) {
       overallHealth: report.verdict.overallHealth,
       risk: report.risk.level,
       secretHygiene: report.secretHygiene.status,
+      dependencyRisk: `${report.dependencyRisk.level} / ${report.dependencyRisk.score}`,
       verdict: report.verdict.style,
       rulePack: report.rulePack,
       scanTarget: report.scanTarget.label,
@@ -53,6 +54,7 @@ export async function POST(request: Request) {
 - **Overall Health**: ${summary.overallHealth} / 100
 - **Risk**: ${summary.risk}
 - **Secret Hygiene**: ${summary.secretHygiene}
+- **Dependency Risk**: ${summary.dependencyRisk}
 - **Scan Target**: ${summary.scanTarget}
 - **Top Remediation**: ${summary.topRemediation ?? "No urgent remediation item"}
 - **Verdict**: ${summary.verdict}

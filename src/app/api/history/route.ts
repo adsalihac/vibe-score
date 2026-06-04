@@ -11,6 +11,7 @@ function reportMetricSnapshot(payload: Partial<InvestigationReport>) {
     technicalDebt: payload.technicalDebt?.index ?? 0,
     testing: payload.testing?.coverageConfidence ?? 0,
     secretHygiene: payload.secretHygiene?.score ?? 0,
+    dependencyRisk: payload.dependencyRisk?.score ?? 0,
   };
 }
 

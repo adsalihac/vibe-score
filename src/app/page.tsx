@@ -17,6 +17,7 @@ import {
   KeyRound,
   Link2,
   ListChecks,
+  PackageSearch,
   Share2,
   ShieldCheck,
   Star,
@@ -42,6 +43,7 @@ const INVESTIGATION_LOGS = [
   "[✓] Accessing repository",
   "[✓] Reading file structure",
   "[✓] Building dependency graph",
+  "[✓] Assessing dependency risk",
   "[✓] Inspecting commit history",
   "[✓] Detecting generation patterns",
   "[✓] Evaluating architecture",
@@ -206,6 +208,11 @@ export default function Home() {
         metric: "Secret Hygiene",
         previous: previousScan.metrics.secretHygiene,
         current: report.secretHygiene.score,
+      },
+      {
+        metric: "Dependency Risk",
+        previous: previousScan.metrics.dependencyRisk ?? 0,
+        current: report.dependencyRisk.score,
       },
       {
         metric: "Risk Tier",
@@ -573,7 +580,7 @@ export default function Home() {
             WE INVESTIGATE CODE.
           </h1>
           <p className="mt-4 max-w-3xl text-sm leading-relaxed text-[var(--muted)] md:text-base">
-            Paste a GitHub repository URL and receive a complete forensic investigation report covering AI-assisted development patterns, maintainability, documentation quality, technical debt, architecture health, and production readiness.
+            Paste a GitHub repository URL and receive a complete forensic investigation report covering AI-assisted development patterns, maintainability, documentation quality, third-party dependency risk, technical debt, architecture health, and production readiness.
           </p>
 
           <div className="mt-6 flex flex-wrap gap-2">
@@ -817,6 +824,7 @@ export default function Home() {
                       {statLabel("Maintainability", `${comparison.left.maintainability.score}`)}
                       {statLabel("Technical Debt", `${comparison.left.technicalDebt.index}%`)}
                       {statLabel("Testing", `${comparison.left.testing.coverageConfidence}%`)}
+                      {statLabel("Dependency Risk", `${comparison.left.dependencyRisk.score}/100`)}
                       {statLabel("Risk Level", comparison.left.risk.level)}
                     </div>
                   </Panel>
@@ -832,6 +840,7 @@ export default function Home() {
                       {statLabel("Maintainability", `${comparison.right.maintainability.score}`)}
                       {statLabel("Technical Debt", `${comparison.right.technicalDebt.index}%`)}
                       {statLabel("Testing", `${comparison.right.testing.coverageConfidence}%`)}
+                      {statLabel("Dependency Risk", `${comparison.right.dependencyRisk.score}/100`)}
                       {statLabel("Risk Level", comparison.right.risk.level)}
                     </div>
                   </Panel>
@@ -908,6 +917,7 @@ export default function Home() {
                 {statLabel("Repository Age", report.repository.repositoryAge)}
                 {statLabel("Last Activity", report.repository.lastActivity)}
                 {statLabel("Dependency Count", report.repository.dependencyCount)}
+                {statLabel("Dependency Risk", `${report.dependencyRisk.score}/100`)}
                 {statLabel("Rule Pack", report.rulePack)}
                 {statLabel("Scan Target", report.scanTarget.label)}
               </div>
@@ -1019,6 +1029,43 @@ export default function Home() {
                   {report.secretHygiene.signals.map((signal) => (
                     <p key={signal}>- {signal}</p>
                   ))}
+                </div>
+              </Panel>
+
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <PackageSearch className="h-4 w-4 text-[var(--accent-primary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Dependency Risk Review</h3>
+                </div>
+                <p className={`mt-3 text-4xl font-bold ${scoreTint(report.dependencyRisk.score)}`}>
+                  {report.dependencyRisk.score}
+                </p>
+                <p className="mono mt-1 text-xs uppercase tracking-[0.16em] text-[var(--muted)]">
+                  {report.dependencyRisk.level} risk / {report.dependencyRisk.lockfileStatus}
+                </p>
+                <p className="mt-4 text-sm leading-relaxed text-[var(--muted)]">
+                  {report.dependencyRisk.summary}
+                </p>
+                <div className="mt-4 grid gap-2 text-xs text-zinc-200 sm:grid-cols-3">
+                  {statLabel("Direct", report.dependencyRisk.directDependencies)}
+                  {statLabel("Transitive", report.dependencyRisk.transitiveDependencies)}
+                  {statLabel("High Risk", report.dependencyRisk.highRiskCount)}
+                </div>
+                <div className="mt-4 space-y-2 text-xs text-zinc-200">
+                  {report.dependencyRisk.topRisks.length > 0 ? (
+                    report.dependencyRisk.topRisks.slice(0, 3).map((item) => (
+                      <div key={`${item.ecosystem}-${item.name}`} className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-[var(--foreground)]">{item.name}</span>
+                          <span className="text-[var(--muted)]">{item.action}</span>
+                          <span className="text-[var(--accent-secondary)]">{item.featureNeed}</span>
+                        </div>
+                        <p className="mt-2 text-[var(--muted)]">{item.signals[0]}</p>
+                      </div>
+                    ))
+                  ) : (
+                    report.dependencyRisk.findings.map((finding) => <p key={finding}>- {finding}</p>)
+                  )}
                 </div>
               </Panel>
             </div>
@@ -1143,6 +1190,9 @@ ${report.maintainability.score}
 
 Secret Hygiene:
 ${report.secretHygiene.status} / ${report.secretHygiene.score}
+
+Dependency Risk:
+${report.dependencyRisk.level} / ${report.dependencyRisk.score}
 
 Top Remediation:
 ${report.remediationPlan[0]?.title ?? "No urgent remediation"}
