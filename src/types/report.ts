@@ -239,3 +239,21 @@ export interface ComparisonReport {
   deltas: ComparisonDelta[];
   callouts: ComparisonCallouts;
 }
+
+export interface LeaderboardEntry {
+  repoFullName: string;
+  owner: string;
+  health: number;
+  documentation: number;
+  dependencyRisk: number;
+  riskLevel: RiskLevel;
+  generatedAt: string;
+  improvement?: number;
+}
+
+export interface LeaderboardReport {
+  bestHealth: LeaderboardEntry[];
+  mostImproved: LeaderboardEntry[];
+  lowestDependencyRisk: LeaderboardEntry[];
+  bestDocs: LeaderboardEntry[];
+}

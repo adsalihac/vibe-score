@@ -8,6 +8,8 @@ import Image from "next/image";
 import {
   AlertTriangle,
   Binary,
+  Bot,
+  Calculator,
   CheckCircle2,
   ClipboardList,
   Coffee,
@@ -20,12 +22,15 @@ import {
   KeyRound,
   Link2,
   ListChecks,
+  Mail,
   PackageSearch,
   Search,
   Share2,
   ShieldCheck,
   Star,
   TrendingUp,
+  Trophy,
+  Users,
   Wrench,
 } from "lucide-react";
 
@@ -60,6 +65,7 @@ const INVESTIGATION_LOGS = [
 type Phase = "idle" | "investigating" | "report";
 type RemediationPriorityFilter = "All" | "Critical" | "High" | "Medium";
 type FindingCategoryFilter = "All" | InvestigationReport["explainableFindings"][number]["category"];
+type VoiceMode = "roast" | "praise" | "investor" | "cto" | "junior";
 
 const PROJECT_REPO = "adsalihac/vibe-score";
 const BUY_ME_COFFEE_URL = "https://www.buymeacoffee.com/adsalihac";
@@ -97,6 +103,30 @@ function missionImpact(priority: "Critical" | "High" | "Medium", effort: "Low" |
   return Math.max(3, priorityBoost - effortDrag);
 }
 
+function clampScore(value: number) {
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function voiceModeSummary(report: InvestigationReport, mode: VoiceMode) {
+  const topMission = report.remediationPlan[0]?.title ?? "tighten the basics";
+  const risk = `${report.risk.level.toLowerCase()} risk`;
+
+  if (mode === "roast") {
+    return `This repo is trying, but the scoreboard says ${report.verdict.overallHealth}/100. ${topMission} is the first thing to fix before the code asks for a long vacation.`;
+  }
+  if (mode === "praise") {
+    return `${report.repository.fullName} has a clear foundation: ${report.verdict.style}, ${risk}, and a practical path upward. Nail ${topMission} and the next scan should feel meaningfully better.`;
+  }
+  if (mode === "investor") {
+    return `Current readiness is ${report.verdict.productionReadiness}. The main diligence signal is ${risk}; the highest-leverage remediation is ${topMission}. This is a concise view of execution risk before deeper technical diligence.`;
+  }
+  if (mode === "cto") {
+    return `Engineering readout: health ${report.verdict.overallHealth}/100, dependency risk ${report.dependencyRisk.score}/100, testing confidence ${report.testing.coverageConfidence}%. Prioritize ${topMission}, then rescan to validate movement.`;
+  }
+
+  return `Think of the score as a repo report card. The biggest homework item is: ${topMission}. Fix that, run VibeScore again, and watch which bars move up or down.`;
+}
+
 export default function Home() {
   const initialScanState = readInitialScanState();
   const [repoUrl, setRepoUrl] = useState(initialScanState.repoUrl);
@@ -124,6 +154,8 @@ export default function Home() {
   const [findingCategory, setFindingCategory] = useState<FindingCategoryFilter>("All");
   const [reportSearch, setReportSearch] = useState("");
   const [clipboardMessage, setClipboardMessage] = useState<string | null>(null);
+  const [voiceMode, setVoiceMode] = useState<VoiceMode>("cto");
+  const [selectedSimulationMissions, setSelectedSimulationMissions] = useState<string[]>([]);
   const reportCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -194,6 +226,12 @@ export default function Home() {
     window.setTimeout(() => setClipboardMessage(null), 2200);
   };
 
+  const toggleSimulationMission = (id: string) => {
+    setSelectedSimulationMissions((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  };
+
   useEffect(() => {
     let mounted = true;
 
@@ -218,6 +256,19 @@ export default function Home() {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      if (!report) {
+        setSelectedSimulationMissions([]);
+        return;
+      }
+
+      setSelectedSimulationMissions(report.remediationPlan.slice(0, 2).map((item) => item.id));
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [report]);
 
   const topShareLine = useMemo(() => {
     if (report) {
@@ -463,6 +514,21 @@ jobs:
     }));
   }, [report]);
 
+  const simulation = useMemo(() => {
+    if (!report) {
+      return null;
+    }
+
+    const selected = fixMissions.filter((mission) => selectedSimulationMissions.includes(mission.id));
+    const projectedGain = selected.reduce((total, mission) => total + mission.estimatedGain, 0);
+
+    return {
+      selected,
+      projectedGain,
+      projectedScore: clampScore(report.verdict.overallHealth + projectedGain),
+    };
+  }, [fixMissions, report, selectedSimulationMissions]);
+
   const publicProfileUrl = useMemo(() => {
     if (!report) {
       return "";
@@ -492,6 +558,98 @@ jobs:
       regressedMetrics,
     };
   }, [negativeComparisonMetrics, previousScan, report, trendDeltas]);
+
+  const voiceSummary = useMemo(() => {
+    if (!report) {
+      return "";
+    }
+
+    return voiceModeSummary(report, voiceMode);
+  }, [report, voiceMode]);
+
+  const weeklyDigest = useMemo(() => {
+    if (!report) {
+      return "";
+    }
+
+    const delta = progressSummary
+      ? `${progressSummary.healthDelta > 0 ? "+" : ""}${progressSummary.healthDelta} health points since the previous scan`
+      : "No previous baseline yet";
+    const dependencyLine =
+      report.dependencyRisk.highRiskCount > 0
+        ? `${report.dependencyRisk.highRiskCount} high-risk dependencies need review`
+        : "No high-risk dependency concentration detected";
+    const docsLine =
+      report.documentation.score >= 75
+        ? "Documentation is in useful shape"
+        : "Documentation needs handoff-ready improvements";
+
+    return `Weekly VibeScore Digest
+
+Repository: ${report.repository.fullName}
+Health: ${report.verdict.overallHealth}/100 (${delta})
+Risk: ${report.risk.level}
+Dependency watch: ${dependencyLine}
+Docs: ${docsLine}
+Next mission: ${fixMissions[0]?.title ?? "Keep monitoring health after meaningful changes."}
+Public profile: ${publicProfileUrl}`;
+  }, [fixMissions, progressSummary, publicProfileUrl, report]);
+
+  const prBotWorkflow = useMemo(() => {
+    if (!report) {
+      return "";
+    }
+
+    return `name: VibeScore PR Bot
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+jobs:
+  comment:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Scan pull request
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: |
+          RESPONSE=$(curl -s -X POST "${typeof window !== "undefined" ? window.location.origin : ""}/api/ci-summary" \\
+            -H "Content-Type: application/json" \\
+            -H "Authorization: Bearer \${GH_TOKEN}" \\
+            -d '{"repoUrl":"https://github.com/${report.repository.fullName}","rulePack":"${report.rulePack}","scanTarget":{"mode":"pull_request","pullRequestNumber":\${{ github.event.pull_request.number }}}}')
+          BODY=$(echo "$RESPONSE" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).markdown||d))")
+          gh pr comment \${{ github.event.pull_request.number }} --body "$BODY"`;
+  }, [report]);
+
+  const teamDashboardActions = useMemo(() => {
+    if (!report) {
+      return [];
+    }
+
+    return [
+      {
+        label: "Risky repos",
+        value: orgSummary ? orgSummary.riskBreakdown.HIGH : report.risk.level === "HIGH" ? 1 : 0,
+        note: report.risk.level === "HIGH" ? `${report.repository.fullName} needs owner attention.` : "No high-risk current scan.",
+      },
+      {
+        label: "Improving",
+        value: progressSummary && progressSummary.healthDelta > 0 ? `+${progressSummary.healthDelta}` : "Baseline",
+        note: progressSummary ? `${progressSummary.improvedMetrics.length} signals improved.` : "Run a second scan to measure movement.",
+      },
+      {
+        label: "Stale dependencies",
+        value: report.dependencyRisk.highRiskCount,
+        note: report.dependencyRisk.recommendations[0] ?? report.dependencyRisk.summary,
+      },
+      {
+        label: "Needs handoff docs",
+        value: report.documentation.score < 70 ? "Yes" : "No",
+        note: report.documentation.score < 70 ? "Improve setup, deployment, and operating notes." : "Docs are currently serviceable.",
+      },
+    ];
+  }, [orgSummary, progressSummary, report]);
 
   const runLogAnimation = () => {
     setLogs([]);
@@ -1463,6 +1621,135 @@ Generated by VibeScore: ${shareableScanUrl}`;
               </div>
             </Panel>
 
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <Calculator className="h-4 w-4 text-[var(--accent-secondary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Score Simulator</h3>
+                </div>
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  Select missions to estimate the next scan after fixes land.
+                </p>
+                <div className="mt-4 rounded-lg border border-[var(--border)] bg-black/25 p-4">
+                  <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
+                    Projected Score
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-end gap-3">
+                    <span className="text-4xl font-bold text-[var(--foreground)]">
+                      {report.verdict.overallHealth} → {simulation?.projectedScore ?? report.verdict.overallHealth}
+                    </span>
+                    <span className="pb-1 text-sm font-semibold text-[var(--accent-primary)]">
+                      +{simulation?.projectedGain ?? 0} estimated
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-4 space-y-2">
+                  {fixMissions.map((mission) => (
+                    <label
+                      key={mission.id}
+                      className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-[var(--border)] bg-black/20 p-3 text-xs transition hover:border-[var(--accent-secondary)]"
+                    >
+                      <span className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={selectedSimulationMissions.includes(mission.id)}
+                          onChange={() => toggleSimulationMission(mission.id)}
+                          className="h-4 w-4 accent-[var(--accent-primary)]"
+                        />
+                        <span className="text-[var(--foreground)]">{mission.title}</span>
+                      </span>
+                      <span className="shrink-0 text-[var(--accent-secondary)]">+{mission.estimatedGain}</span>
+                    </label>
+                  ))}
+                </div>
+              </Panel>
+
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <Bot className="h-4 w-4 text-[var(--accent-primary)]" />
+                  <h3 className="text-lg font-semibold uppercase">AI Roast / Praise Mode</h3>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {[
+                    ["cto", "CTO"],
+                    ["investor", "Investor"],
+                    ["junior", "Junior"],
+                    ["praise", "Praise"],
+                    ["roast", "Roast"],
+                  ].map(([value, label]) => (
+                    <Button
+                      key={value}
+                      type="button"
+                      size="sm"
+                      variant={voiceMode === value ? "primary" : "outline"}
+                      onClick={() => setVoiceMode(value as VoiceMode)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+                <div className="mt-4 rounded-lg border border-[var(--border)] bg-black/25 p-4">
+                  <p className="text-sm leading-relaxed text-zinc-100">{voiceSummary}</p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-4 w-full justify-start gap-2"
+                  onClick={() => copyToClipboard(voiceSummary, "Voice summary copied")}
+                >
+                  <Copy className="h-4 w-4" />
+                  Copy This Take
+                </Button>
+              </Panel>
+            </div>
+
+            <div className="grid gap-6 lg:grid-cols-2">
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <Users className="h-4 w-4 text-[var(--accent-secondary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Team Dashboard</h3>
+                </div>
+                <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                  {teamDashboardActions.map((item) => (
+                    <div key={item.label} className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                      <p className="text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">{item.label}</p>
+                      <p className="mt-1 text-lg font-semibold text-[var(--foreground)]">{item.value}</p>
+                      <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">{item.note}</p>
+                    </div>
+                  ))}
+                </div>
+                <a
+                  href="/leaderboard"
+                  className="mt-4 inline-flex w-full items-center justify-start gap-2 rounded-md border border-[var(--border)] px-4 py-3 text-xs uppercase tracking-[0.12em] text-[var(--muted)] transition hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)]"
+                >
+                  <Trophy className="h-4 w-4" />
+                  Open Repo Leaderboard
+                </a>
+              </Panel>
+
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <Mail className="h-4 w-4 text-[var(--accent-primary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Weekly Digest</h3>
+                </div>
+                <p className="mt-3 text-xs text-[var(--muted)]">
+                  Copy this into email, Slack, Linear, or founder updates.
+                </p>
+                <pre className="mt-4 whitespace-pre-wrap rounded-md border border-[var(--border)] bg-black/40 p-3 text-[0.7rem] text-[#bcffe8]">
+                  {weeklyDigest}
+                </pre>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="mt-4 w-full justify-start gap-2"
+                  onClick={() => copyToClipboard(weeklyDigest, "Weekly digest copied")}
+                >
+                  <Copy className="h-4 w-4" />
+                  Copy Weekly Digest
+                </Button>
+              </Panel>
+            </div>
+
             <Panel>
               <div className="flex items-center gap-2">
                 <Wrench className="h-4 w-4 text-[var(--accent-primary)]" />
@@ -1869,6 +2156,26 @@ ${report.verdict.style}
                   <pre className="whitespace-pre-wrap rounded-md border border-[var(--border)] bg-black/40 p-3 text-[0.65rem] text-[#bcffe8]">
                     {ciWorkflow}
                   </pre>
+                  <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                    <div className="flex items-center gap-2">
+                      <GitPullRequest className="h-4 w-4 text-[var(--accent-secondary)]" />
+                      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-[var(--foreground)]">
+                        PR Bot Commenter
+                      </p>
+                    </div>
+                    <p className="mt-2 text-xs leading-relaxed text-[var(--muted)]">
+                      Comment a VibeScore summary on every pull request so reviewers see health and risk movement.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="mt-3 w-full justify-start gap-2"
+                      onClick={() => copyToClipboard(prBotWorkflow, "PR bot workflow copied")}
+                    >
+                      <Copy className="h-4 w-4" />
+                      Copy PR Bot Workflow
+                    </Button>
+                  </div>
                 </div>
               </Panel>
 
