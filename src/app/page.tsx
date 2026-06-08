@@ -65,7 +65,7 @@ const PROJECT_REPO = "adsalihac/vibe-score";
 const BUY_ME_COFFEE_URL = "https://www.buymeacoffee.com/adsalihac";
 
 function readInitialScanState() {
-  const fallback = {
+  return {
     repoUrl: "",
     compareRepoUrl: "",
     mode: "single" as const,
@@ -73,29 +73,6 @@ function readInitialScanState() {
     scanScope: "default" as ScanTargetMode,
     branchRef: "",
     pullRequestNumber: "",
-  };
-
-  if (typeof window === "undefined") {
-    return fallback;
-  }
-
-  const params = new URLSearchParams(window.location.search);
-  const repo = params.get("repo") ?? fallback.repoUrl;
-  const compare = params.get("compare") ?? fallback.compareRepoUrl;
-  const pack = params.get("rulePack");
-  const scope = params.get("scope");
-
-  return {
-    repoUrl: repo,
-    compareRepoUrl: compare,
-    mode: compare ? ("compare" as const) : fallback.mode,
-    rulePack: pack && RULE_PACKS.some((item) => item.id === pack) ? (pack as RulePackId) : fallback.rulePack,
-    scanScope:
-      scope === "branch" || scope === "pull_request" || scope === "default"
-        ? scope
-        : fallback.scanScope,
-    branchRef: params.get("ref") ?? fallback.branchRef,
-    pullRequestNumber: params.get("pr") ?? fallback.pullRequestNumber,
   };
 }
 
@@ -150,6 +127,41 @@ export default function Home() {
         setGithubToken(savedToken);
       }, 0);
     }
+  }, []);
+
+  useEffect(() => {
+    const applyUrlState = () => {
+      const params = new URLSearchParams(window.location.search);
+      const repo = params.get("repo");
+      const compare = params.get("compare");
+      const pack = params.get("rulePack");
+      const scope = params.get("scope");
+      const ref = params.get("ref");
+      const pr = params.get("pr");
+
+      if (repo) {
+        setRepoUrl(repo);
+      }
+      if (compare) {
+        setCompareRepoUrl(compare);
+        setMode("compare");
+      }
+      if (pack && RULE_PACKS.some((item) => item.id === pack)) {
+        setRulePack(pack as RulePackId);
+      }
+      if (scope === "branch" || scope === "pull_request" || scope === "default") {
+        setScanScope(scope);
+      }
+      if (ref) {
+        setBranchRef(ref);
+      }
+      if (pr) {
+        setPullRequestNumber(pr);
+      }
+    };
+
+    const timeout = window.setTimeout(applyUrlState, 0);
+    return () => window.clearTimeout(timeout);
   }, []);
 
   const handleTokenChange = (val: string) => {
