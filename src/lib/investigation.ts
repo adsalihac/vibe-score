@@ -1085,25 +1085,28 @@ function collectPackageJsonDependencies(
 }
 
 function parseRequirementsTxt(path: string, content: string): DependencyDeclaration[] {
-  return content
+  const declarations: DependencyDeclaration[] = [];
+
+  content
     .split("\n")
     .map((line) => line.replace(/#.*/, "").trim())
     .filter((line) => line && !line.startsWith("-") && !/^https?:\/\//i.test(line))
-    .map((line) => {
+    .forEach((line) => {
       const match = line.match(/^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?\s*([<>=!~].*)?$/);
       if (!match) {
-        return null;
+        return;
       }
 
-      return {
+      declarations.push({
         name: match[1],
         version: match[2]?.trim() ?? "unpinned",
         ecosystem: "pypi",
         scope: "production",
         manifestPath: path,
-      };
-    })
-    .filter((item): item is DependencyDeclaration => !!item);
+      });
+    });
+
+  return declarations;
 }
 
 function parsePyprojectToml(path: string, content: string): DependencyDeclaration[] {
@@ -1502,7 +1505,11 @@ function buildDependencyRisk(args: {
   const lockfiles = dependencyFiles.filter((file) => DEPENDENCY_LOCK_FILES.has(dependencyFileBasename(file.path)));
   const declarations = parseDependencyDeclarations(dependencyFiles, packageJson);
   const ecosystems = new Set(declarations.map((dependency) => dependency.ecosystem));
-  const lockedEcosystems = new Set(lockfiles.map((file) => lockfileEcosystem(file.path)).filter((item): item is string => !!item));
+  const lockedEcosystems = new Set<string>(
+    lockfiles
+      .map((file) => lockfileEcosystem(file.path))
+      .filter((item): item is NonNullable<ReturnType<typeof lockfileEcosystem>> => item !== null),
+  );
   const lockfileStatus: DependencyRiskReview["lockfileStatus"] =
     declarations.length === 0 || ecosystems.size === 0
       ? "LOCKED"

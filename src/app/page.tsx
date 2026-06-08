@@ -8,18 +8,23 @@ import Image from "next/image";
 import {
   AlertTriangle,
   Binary,
+  CheckCircle2,
+  ClipboardList,
   Coffee,
   Copy,
   Download,
   ExternalLink,
+  Gauge,
   GitFork,
   GitPullRequest,
   KeyRound,
   Link2,
   ListChecks,
   PackageSearch,
+  Search,
   Share2,
   ShieldCheck,
+  Sparkles,
   Star,
   TrendingUp,
   Wrench,
@@ -54,9 +59,66 @@ const INVESTIGATION_LOGS = [
 ];
 
 type Phase = "idle" | "investigating" | "report";
+type RemediationPriorityFilter = "All" | "Critical" | "High" | "Medium";
+type FindingCategoryFilter = "All" | InvestigationReport["explainableFindings"][number]["category"];
 
 const PROJECT_REPO = "adsalihac/vibe-score";
 const BUY_ME_COFFEE_URL = "https://www.buymeacoffee.com/adsalihac";
+const QUICK_START_REPOS = [
+  {
+    label: "Next.js",
+    repo: "vercel/next.js",
+    note: "Framework-scale benchmark",
+    rulePack: "enterprise" as RulePackId,
+  },
+  {
+    label: "Supabase",
+    repo: "supabase/supabase",
+    note: "Product platform scan",
+    rulePack: "startup" as RulePackId,
+  },
+  {
+    label: "React",
+    repo: "facebook/react",
+    note: "Open-source maturity",
+    rulePack: "oss" as RulePackId,
+  },
+];
+
+function readInitialScanState() {
+  const fallback = {
+    repoUrl: "",
+    compareRepoUrl: "",
+    mode: "single" as const,
+    rulePack: "startup" as RulePackId,
+    scanScope: "default" as ScanTargetMode,
+    branchRef: "",
+    pullRequestNumber: "",
+  };
+
+  if (typeof window === "undefined") {
+    return fallback;
+  }
+
+  const params = new URLSearchParams(window.location.search);
+  const repo = params.get("repo") ?? fallback.repoUrl;
+  const compare = params.get("compare") ?? fallback.compareRepoUrl;
+  const pack = params.get("rulePack");
+  const scope = params.get("scope");
+
+  return {
+    repoUrl: repo,
+    compareRepoUrl: compare,
+    mode: compare ? ("compare" as const) : fallback.mode,
+    rulePack: pack && RULE_PACKS.some((item) => item.id === pack) ? (pack as RulePackId) : fallback.rulePack,
+    scanScope:
+      scope === "branch" || scope === "pull_request" || scope === "default"
+        ? scope
+        : fallback.scanScope,
+    branchRef: params.get("ref") ?? fallback.branchRef,
+    pullRequestNumber: params.get("pr") ?? fallback.pullRequestNumber,
+  };
+}
 
 function statLabel(label: string, value: string | number) {
   return (
@@ -74,9 +136,10 @@ function scoreTint(value: number) {
 }
 
 export default function Home() {
-  const [repoUrl, setRepoUrl] = useState("");
-  const [compareRepoUrl, setCompareRepoUrl] = useState("");
-  const [mode, setMode] = useState<"single" | "compare">("single");
+  const initialScanState = readInitialScanState();
+  const [repoUrl, setRepoUrl] = useState(initialScanState.repoUrl);
+  const [compareRepoUrl, setCompareRepoUrl] = useState(initialScanState.compareRepoUrl);
+  const [mode, setMode] = useState<"single" | "compare">(initialScanState.mode);
   const [phase, setPhase] = useState<Phase>("idle");
   const [report, setReport] = useState<InvestigationReport | null>(null);
   const [comparison, setComparison] = useState<ComparisonReport | null>(null);
@@ -86,15 +149,19 @@ export default function Home() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [starCount, setStarCount] = useState<number | null>(null);
-  const [rulePack, setRulePack] = useState<RulePackId>("startup");
+  const [rulePack, setRulePack] = useState<RulePackId>(initialScanState.rulePack);
   const [history, setHistory] = useState<HistoricalInvestigation[]>([]);
   const [orgSummary, setOrgSummary] = useState<OrganizationSummary | null>(null);
   const [persistenceNote, setPersistenceNote] = useState<string | null>(null);
   const [schedule, setSchedule] = useState<"daily" | "weekly" | "monthly">("weekly");
-  const [scanScope, setScanScope] = useState<ScanTargetMode>("default");
-  const [branchRef, setBranchRef] = useState("");
-  const [pullRequestNumber, setPullRequestNumber] = useState("");
+  const [scanScope, setScanScope] = useState<ScanTargetMode>(initialScanState.scanScope);
+  const [branchRef, setBranchRef] = useState(initialScanState.branchRef);
+  const [pullRequestNumber, setPullRequestNumber] = useState(initialScanState.pullRequestNumber);
   const [githubToken, setGithubToken] = useState("");
+  const [remediationPriority, setRemediationPriority] = useState<RemediationPriorityFilter>("All");
+  const [findingCategory, setFindingCategory] = useState<FindingCategoryFilter>("All");
+  const [reportSearch, setReportSearch] = useState("");
+  const [clipboardMessage, setClipboardMessage] = useState<string | null>(null);
   const reportCardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -109,6 +176,36 @@ export default function Home() {
   const handleTokenChange = (val: string) => {
     setGithubToken(val);
     localStorage.setItem("vibescore_github_token", val);
+  };
+
+  const copyToClipboard = async (value: string, message: string) => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "true");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+
+    setClipboardMessage(message);
+    window.setTimeout(() => setClipboardMessage(null), 2200);
+  };
+
+  const handleQuickStart = (repo: (typeof QUICK_START_REPOS)[number]) => {
+    setMode("single");
+    setRepoUrl(repo.repo);
+    setCompareRepoUrl("");
+    setRulePack(repo.rulePack);
+    setScanScope("default");
+    setBranchRef("");
+    setPullRequestNumber("");
+    setError(null);
   };
 
   useEffect(() => {
@@ -260,6 +357,114 @@ export default function Home() {
     return JSON.stringify(payload);
   }, [report]);
 
+  const shareableScanUrl = useMemo(() => {
+    const params = new URLSearchParams();
+    if (repoUrl.trim()) {
+      params.set("repo", repoUrl.trim());
+    }
+    if (mode === "compare" && compareRepoUrl.trim()) {
+      params.set("compare", compareRepoUrl.trim());
+    }
+    params.set("rulePack", rulePack);
+    if (mode === "single" && scanScope !== "default") {
+      params.set("scope", scanScope);
+      if (scanScope === "branch" && branchRef.trim()) {
+        params.set("ref", branchRef.trim());
+      }
+      if (scanScope === "pull_request" && pullRequestNumber.trim()) {
+        params.set("pr", pullRequestNumber.trim());
+      }
+    }
+
+    const query = params.toString();
+    return `${typeof window !== "undefined" ? window.location.origin : ""}${query ? `?${query}` : ""}`;
+  }, [branchRef, compareRepoUrl, mode, pullRequestNumber, repoUrl, rulePack, scanScope]);
+
+  const ciWorkflow = useMemo(() => {
+    return `name: VibeScore Scan
+on:
+  schedule:
+    - cron: "${schedule === "daily" ? "0 2 * * *" : schedule === "weekly" ? "0 2 * * 1" : "0 3 1 * *"}"
+  workflow_dispatch:
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger VibeScore
+        run: |
+          curl -X POST "${typeof window !== "undefined" ? window.location.origin : ""}/api/ci-summary" \\
+            -H "Content-Type: application/json" \\
+            -d '${ciPayload}'`;
+  }, [ciPayload, schedule]);
+
+  const scoreBreakdown = useMemo(() => {
+    if (!report) {
+      return [];
+    }
+
+    return [
+      { label: "Overall Health", value: report.verdict.overallHealth, positive: true },
+      { label: "Documentation", value: report.documentation.score, positive: true },
+      { label: "Maintainability", value: report.maintainability.score, positive: true },
+      { label: "Testing Confidence", value: report.testing.coverageConfidence, positive: true },
+      { label: "Secret Hygiene", value: report.secretHygiene.score, positive: true },
+      { label: "Dependency Risk", value: report.dependencyRisk.score, positive: true },
+      { label: "Technical Debt", value: report.technicalDebt.index, positive: false },
+      { label: "AI Assistance", value: report.aiAssistance.score, positive: true },
+    ];
+  }, [report]);
+
+  const filteredRemediationPlan = useMemo(() => {
+    if (!report) {
+      return [];
+    }
+
+    const query = reportSearch.trim().toLowerCase();
+    return report.remediationPlan.filter((item) => {
+      const priorityMatches = remediationPriority === "All" || item.priority === remediationPriority;
+      const queryMatches =
+        !query ||
+        [item.category, item.title, item.summary, item.impact, ...item.actions]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+
+      return priorityMatches && queryMatches;
+    });
+  }, [remediationPriority, report, reportSearch]);
+
+  const filteredFindings = useMemo(() => {
+    if (!report) {
+      return [];
+    }
+
+    const query = reportSearch.trim().toLowerCase();
+    return report.explainableFindings.filter((finding) => {
+      const categoryMatches = findingCategory === "All" || finding.category === findingCategory;
+      const queryMatches =
+        !query ||
+        [
+          finding.category,
+          finding.title,
+          finding.summary,
+          ...finding.evidence.flatMap((evidence) => [evidence.label, evidence.value, evidence.path ?? ""]),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+
+      return categoryMatches && queryMatches;
+    });
+  }, [findingCategory, report, reportSearch]);
+
+  const findingCategories = useMemo(() => {
+    if (!report) {
+      return [];
+    }
+
+    return Array.from(new Set(report.explainableFindings.map((finding) => finding.category)));
+  }, [report]);
+
   const runLogAnimation = () => {
     setLogs([]);
     setTypingLine("");
@@ -335,6 +540,7 @@ export default function Home() {
       return;
     }
 
+    window.history.replaceState(null, "", new URL(shareableScanUrl).search || window.location.pathname);
     setError(null);
     setReport(null);
     setComparison(null);
@@ -403,6 +609,7 @@ export default function Home() {
       return;
     }
 
+    window.history.replaceState(null, "", new URL(shareableScanUrl).search || window.location.pathname);
     setError(null);
     setReport(null);
     setComparison(null);
@@ -522,21 +729,34 @@ export default function Home() {
   };
 
   const copyPublicLink = async () => {
-    const url = window.location.origin;
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(url);
-      return;
-    }
+    await copyToClipboard(shareableScanUrl, "Share link copied");
+  };
 
-    const textarea = document.createElement("textarea");
-    textarea.value = url;
-    textarea.setAttribute("readonly", "true");
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textarea);
+  const copyMarkdownReport = async () => {
+    if (!report) return;
+
+    const markdown = `# VibeScore Report: ${report.repository.fullName}
+
+- Health: ${report.verdict.overallHealth}/100
+- Production readiness: ${report.verdict.productionReadiness}
+- Risk: ${report.risk.level}
+- Rule pack: ${report.rulePack}
+- Scan target: ${report.scanTarget.label}
+- Dependency risk: ${report.dependencyRisk.level} (${report.dependencyRisk.score}/100)
+- Secret hygiene: ${report.secretHygiene.status} (${report.secretHygiene.score}/100)
+
+## Verdict
+${report.verdict.message}
+
+## Top Remediation
+${report.remediationPlan
+  .slice(0, 3)
+  .map((item, index) => `${index + 1}. ${item.title} (${item.priority}, ${item.effort} effort): ${item.impact}`)
+  .join("\n")}
+
+Generated by VibeScore: ${shareableScanUrl}`;
+
+    await copyToClipboard(markdown, "Markdown summary copied");
   };
 
   const shareOnX = () => {
@@ -552,7 +772,7 @@ export default function Home() {
   };
 
   return (
-    <main className="relative min-h-screen overflow-x-hidden px-4 py-8 md:px-10">
+    <main className="relative min-h-screen overflow-x-hidden px-4 pb-8 pt-14 md:px-10 md:pb-10 md:pt-16">
       <div className="pointer-events-none absolute inset-0 grid-overlay opacity-25" />
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 md:gap-8">
         <motion.section
@@ -600,6 +820,25 @@ export default function Home() {
             >
               Compare Repos
             </Button>
+          </div>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {QUICK_START_REPOS.map((item) => (
+              <button
+                key={item.repo}
+                type="button"
+                onClick={() => handleQuickStart(item)}
+                disabled={isSubmitting}
+                className="group rounded-md border border-[var(--border)] bg-black/20 p-4 text-left transition hover:border-[var(--accent-secondary)] hover:bg-black/30 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <div className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+                  <Sparkles className="h-4 w-4 text-[var(--accent-secondary)]" />
+                  {item.label}
+                </div>
+                <p className="mt-2 text-xs text-[var(--muted)]">{item.note}</p>
+                <p className="mt-2 text-[0.7rem] text-[var(--accent-primary)]">{item.repo}</p>
+              </button>
+            ))}
           </div>
 
           <div className="mt-6 grid gap-3 lg:grid-cols-3">
@@ -715,6 +954,16 @@ export default function Home() {
               >
                 {mode === "compare" ? "COMPARE REPOS" : "OPEN INVESTIGATION"}
               </Button>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => copyToClipboard(shareableScanUrl, "Scan setup link copied")}
+                disabled={isSubmitting || !repoUrl.trim()}
+                className="h-14 justify-start gap-2"
+              >
+                <Link2 className="h-4 w-4" />
+                Copy Setup Link
+              </Button>
             </div>
           </div>
 
@@ -722,6 +971,12 @@ export default function Home() {
             <div className="mt-4 inline-flex items-center gap-2 rounded-md border border-[var(--danger)]/60 bg-[var(--danger)]/10 px-3 py-2 text-xs text-[var(--danger)]">
               <AlertTriangle className="h-3.5 w-3.5" />
               {error}
+            </div>
+          ) : null}
+          {clipboardMessage ? (
+            <div className="mt-4 inline-flex items-center gap-2 rounded-md border border-[var(--accent-primary)]/50 bg-[var(--accent-primary)]/10 px-3 py-2 text-xs text-[var(--accent-primary)]">
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {clipboardMessage}
             </div>
           ) : null}
         </motion.section>
@@ -1110,13 +1365,91 @@ export default function Home() {
               </div>
             </Panel>
 
+            <div className="grid gap-6 lg:grid-cols-[0.9fr_1.1fr]">
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <ClipboardList className="h-4 w-4 text-[var(--accent-primary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Executive Brief</h3>
+                </div>
+                <div className="mt-4 space-y-3 text-sm text-[var(--muted)]">
+                  <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                    <p className="text-[0.7rem] uppercase text-[var(--muted)]">Decision</p>
+                    <p className="mt-1 text-base font-semibold text-[var(--foreground)]">
+                      {report.verdict.productionReadiness === "HIGH"
+                        ? "Ready for deeper production review"
+                        : report.verdict.productionReadiness === "MEDIUM"
+                          ? "Usable with targeted remediation"
+                          : "Needs stabilization before production"}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                    <p className="text-[0.7rem] uppercase text-[var(--muted)]">Biggest Risk</p>
+                    <p className="mt-1 text-sm text-[var(--foreground)]">
+                      {report.remediationPlan[0]?.title ?? report.risk.summary}
+                    </p>
+                  </div>
+                  <div className="rounded-md border border-[var(--border)] bg-black/20 p-3">
+                    <p className="text-[0.7rem] uppercase text-[var(--muted)]">Next Best Action</p>
+                    <p className="mt-1 text-sm text-[var(--foreground)]">
+                      {report.remediationPlan[0]?.actions[0] ?? "Re-run the scan after the next meaningful repository change."}
+                    </p>
+                  </div>
+                </div>
+              </Panel>
+
+              <Panel>
+                <div className="flex items-center gap-2">
+                  <Gauge className="h-4 w-4 text-[var(--accent-secondary)]" />
+                  <h3 className="text-lg font-semibold uppercase">Score Breakdown</h3>
+                </div>
+                <div className="mt-4 space-y-3">
+                  {scoreBreakdown.map((item) => {
+                    const healthy = item.positive ? item.value >= 70 : item.value <= 30;
+                    return (
+                      <div key={item.label} className="grid gap-2 text-xs sm:grid-cols-[9rem_1fr_3rem] sm:items-center">
+                        <span className="text-[var(--muted)]">{item.label}</span>
+                        <div className="h-2 rounded-full bg-black/40">
+                          <div
+                            className={`h-2 rounded-full ${healthy ? "bg-[var(--accent-primary)]" : "bg-[var(--accent-secondary)]"}`}
+                            style={{ width: `${Math.max(0, Math.min(100, item.value))}%` }}
+                          />
+                        </div>
+                        <span className="text-right text-[var(--foreground)]">{item.value}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Panel>
+            </div>
+
             <Panel>
               <div className="flex items-center gap-2">
                 <Wrench className="h-4 w-4 text-[var(--accent-primary)]" />
                 <h3 className="text-lg font-semibold uppercase">Remediation Plan</h3>
               </div>
+              <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto]">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
+                  <Input
+                    value={reportSearch}
+                    onChange={(event) => setReportSearch(event.target.value)}
+                    placeholder="Search actions, evidence, categories"
+                    className="pl-10 text-xs"
+                  />
+                </div>
+                <select
+                  className="rounded-md border border-[var(--border)] bg-black/30 px-3 py-2 text-xs text-[var(--foreground)]"
+                  value={remediationPriority}
+                  onChange={(event) => setRemediationPriority(event.target.value as RemediationPriorityFilter)}
+                >
+                  <option value="All">All priorities</option>
+                  <option value="Critical">Critical</option>
+                  <option value="High">High</option>
+                  <option value="Medium">Medium</option>
+                </select>
+              </div>
               <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                {report.remediationPlan.map((item) => (
+                {filteredRemediationPlan.map((item) => (
                   <div key={item.id} className="rounded-lg border border-[var(--border)] bg-black/25 p-4">
                     <div className="flex flex-wrap items-center gap-2">
                       <span
@@ -1155,6 +1488,11 @@ export default function Home() {
                     </div>
                   </div>
                 ))}
+                {filteredRemediationPlan.length === 0 ? (
+                  <div className="rounded-lg border border-[var(--border)] bg-black/20 p-4 text-sm text-[var(--muted)]">
+                    No remediation items match the current filters.
+                  </div>
+                ) : null}
               </div>
             </Panel>
 
@@ -1222,9 +1560,13 @@ ${report.verdict.style}
                     <Download className="h-4 w-4" />
                     Download JSON
                   </Button>
+                  <Button variant="outline" className="w-full justify-start gap-2" onClick={copyMarkdownReport}>
+                    <Copy className="h-4 w-4" />
+                    Copy Markdown Summary
+                  </Button>
                   <Button variant="outline" className="w-full justify-start gap-2" onClick={copyPublicLink}>
                     <Copy className="h-4 w-4" />
-                    Copy Public Link
+                    Copy Scan Setup Link
                   </Button>
                   <Button variant="outline" className="w-full justify-start gap-2" onClick={shareOnX}>
                     <Share2 className="h-4 w-4" />
@@ -1243,14 +1585,41 @@ ${report.verdict.style}
                     <ExternalLink className="h-4 w-4" />
                     Open Repository
                   </a>
+                  {clipboardMessage ? (
+                    <div className="inline-flex w-full items-center gap-2 rounded-md border border-[var(--accent-primary)]/50 bg-[var(--accent-primary)]/10 px-3 py-2 text-xs text-[var(--accent-primary)]">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      {clipboardMessage}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </Panel>
 
             <Panel>
               <h3 className="text-lg font-semibold uppercase">Explainable Findings</h3>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={findingCategory === "All" ? "primary" : "outline"}
+                  onClick={() => setFindingCategory("All")}
+                >
+                  All
+                </Button>
+                {findingCategories.map((category) => (
+                  <Button
+                    key={category}
+                    type="button"
+                    size="sm"
+                    variant={findingCategory === category ? "primary" : "outline"}
+                    onClick={() => setFindingCategory(category)}
+                  >
+                    {category}
+                  </Button>
+                ))}
+              </div>
               <div className="mt-4 grid gap-4 md:grid-cols-2">
-                {report.explainableFindings.map((finding) => (
+                {filteredFindings.map((finding) => (
                   <div key={finding.id} className="rounded-lg border border-[var(--border)] bg-black/25 p-4">
                     <p className="mono text-[0.65rem] uppercase tracking-[0.16em] text-[var(--muted)]">
                       {finding.category}
@@ -1272,6 +1641,11 @@ ${report.verdict.style}
                     </div>
                   </div>
                 ))}
+                {filteredFindings.length === 0 ? (
+                  <div className="rounded-lg border border-[var(--border)] bg-black/20 p-4 text-sm text-[var(--muted)]">
+                    No findings match the current filters.
+                  </div>
+                ) : null}
               </div>
             </Panel>
 
@@ -1404,21 +1778,17 @@ ${report.verdict.style}
                     <option value="weekly">Weekly</option>
                     <option value="monthly">Monthly</option>
                   </select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="w-full justify-start gap-2"
+                    onClick={() => copyToClipboard(ciWorkflow, "CI workflow copied")}
+                  >
+                    <Copy className="h-4 w-4" />
+                    Copy Workflow YAML
+                  </Button>
                   <pre className="whitespace-pre-wrap rounded-md border border-[var(--border)] bg-black/40 p-3 text-[0.65rem] text-[#bcffe8]">
-{`name: VibeScore Scan
-on:
-  schedule:
-    - cron: "${schedule === "daily" ? "0 2 * * *" : schedule === "weekly" ? "0 2 * * 1" : "0 3 1 * *"}"
-  workflow_dispatch:
-jobs:
-  scan:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger VibeScore
-        run: |
-          curl -X POST "${typeof window !== "undefined" ? window.location.origin : ""}/api/ci-summary" \\
-            -H "Content-Type: application/json" \\
-            -d '${ciPayload}'`}
+                    {ciWorkflow}
                   </pre>
                 </div>
               </Panel>
