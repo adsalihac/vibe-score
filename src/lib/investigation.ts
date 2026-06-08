@@ -110,8 +110,8 @@ const LOGS = [
   "[✓] Evaluating architecture",
   "[✓] Measuring maintainability",
   "[✓] Analyzing documentation",
-  "[✓] Building forensic report",
-  "[✓] Investigation complete",
+  "[✓] Building repository report",
+  "[✓] Analysis complete",
 ];
 
 const CODE_EXTENSIONS = [

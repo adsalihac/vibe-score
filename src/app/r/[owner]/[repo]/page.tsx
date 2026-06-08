@@ -83,18 +83,18 @@ export default async function RepoProfilePage({
     <main className="relative min-h-screen overflow-x-hidden px-4 py-10 md:px-10">
       <div className="pointer-events-none absolute inset-0 grid-overlay opacity-20" />
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        <section className="signal-frame scan-lines relative overflow-hidden rounded-2xl p-6 md:p-10">
-          <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[var(--accent-primary)] to-transparent opacity-60" />
-          <p className="mono text-xs uppercase tracking-[0.25em] text-[var(--accent-secondary)]">
-            Public VibeScore Profile
+        <section className="signal-frame relative overflow-hidden rounded-lg p-6 md:p-10">
+          <div className="absolute inset-x-0 top-0 h-px bg-[var(--border-strong)]" />
+          <p className="mono text-xs text-[var(--accent-secondary)]">
+            Public repository profile
           </p>
           <div className="mt-5 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <div>
-              <h1 className="text-3xl font-bold uppercase leading-tight text-white md:text-5xl">
+              <h1 className="text-3xl font-bold leading-tight text-white md:text-5xl">
                 {repoFullName}
               </h1>
               <p className="mt-3 max-w-2xl text-sm leading-relaxed text-[var(--muted)]">
-                A public repository health profile built from the latest VibeScore investigation.
+                A public repository health profile built from the latest VibeScore report.
               </p>
             </div>
             <Link

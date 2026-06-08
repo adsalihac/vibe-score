@@ -1,29 +1,31 @@
 import type { Metadata } from "next";
-import { JetBrains_Mono, Manrope, Sora } from "next/font/google";
+import { IBM_Plex_Mono, IBM_Plex_Sans, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 
-const headingFont = Sora({
+const headingFont = Space_Grotesk({
   variable: "--font-heading",
   subsets: ["latin"],
   display: "swap",
 });
 
-const bodyFont = Manrope({
+const bodyFont = IBM_Plex_Sans({
   variable: "--font-body",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
   display: "swap",
 });
 
-const monoFont = JetBrains_Mono({
+const monoFont = IBM_Plex_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
+  weight: ["400", "500", "600", "700"],
   display: "swap",
 });
 
 export const metadata: Metadata = {
-  title: "VibeScore - Repository Forensics",
+  title: "VibeScore - Repository Health Workbench",
   description:
-    "Investigate GitHub repositories with a cinematic forensic report for AI assistance, maintainability, architecture, and production readiness.",
+    "Measure repository health, risk, maintainability, dependency posture, and production readiness with a developer-friendly workbench.",
 };
 
 export default function RootLayout({
