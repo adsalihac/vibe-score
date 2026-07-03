@@ -7,18 +7,18 @@ type ButtonSize = "default" | "sm" | "lg";
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    "bg-[var(--accent-primary)] text-[#101316] border border-[var(--accent-primary)] shadow-[0_8px_18px_rgba(0,0,0,0.18)] hover:bg-[#96dfba] hover:border-[#96dfba]",
+    "border border-[#f7931a]/70 bg-gradient-to-r from-[#ea580c] via-[#f7931a] to-[#ffd600] text-[#0b0d10] shadow-[0_0_24px_-6px_rgba(247,147,26,0.55)] hover:border-[#ffd600] hover:shadow-[0_0_32px_-4px_rgba(255,214,0,0.55)] hover:brightness-110",
   ghost:
-    "bg-transparent border border-transparent text-[var(--foreground)] hover:bg-white/5",
+    "bg-transparent border border-transparent text-[var(--foreground)] hover:bg-white/10 hover:text-[#ffd600]",
   outline:
-    "bg-[#050607] border border-[var(--border)] text-[var(--foreground)] hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)]",
+    "border border-white/12 bg-white/5 text-[var(--foreground)] backdrop-blur-sm hover:border-[#f7931a]/70 hover:bg-white/10 hover:text-[#ffd600]",
   danger:
-    "bg-[var(--danger)] text-white border border-[var(--danger)] hover:bg-transparent hover:text-[var(--danger)]",
+    "border border-[var(--danger)] bg-[var(--danger)] text-white hover:bg-transparent hover:text-[var(--danger)]",
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
   default: "h-11 px-5 text-[0.78rem]",
-  sm: "h-9 px-3 text-[0.68rem]",
+  sm: "h-9 px-4 text-[0.68rem]",
   lg: "h-12 px-6 text-[0.8rem]",
 };
 
@@ -34,7 +34,7 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
       <button
         ref={ref}
         className={cn(
-          "inline-flex items-center justify-center rounded-md font-semibold tracking-normal transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent-primary)]/45",
+          "inline-flex items-center justify-center rounded-full font-body font-semibold tracking-[0.08em] uppercase transition-all duration-300 disabled:pointer-events-none disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f7931a] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--background)]",
           variantClasses[variant],
           sizeClasses[size],
           className,

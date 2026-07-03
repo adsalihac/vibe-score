@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IBM_Plex_Mono, IBM_Plex_Sans, Space_Grotesk } from "next/font/google";
+import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 
 const headingFont = Space_Grotesk({
@@ -8,14 +8,14 @@ const headingFont = Space_Grotesk({
   display: "swap",
 });
 
-const bodyFont = IBM_Plex_Sans({
+const bodyFont = Inter({
   variable: "--font-body",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   display: "swap",
 });
 
-const monoFont = IBM_Plex_Mono({
+const monoFont = JetBrains_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
@@ -23,9 +23,9 @@ const monoFont = IBM_Plex_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "VibeScore - Repository Health Workbench",
+  title: "VibeScore - Bitcoin DeFi Repo Intelligence",
   description:
-    "Measure repository health, risk, maintainability, dependency posture, and production readiness with a developer-friendly workbench.",
+    "Measure repository health, risk, maintainability, dependency posture, and production readiness with a premium Bitcoin DeFi visual system.",
 };
 
 export default function RootLayout({
