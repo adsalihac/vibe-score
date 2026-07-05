@@ -3,10 +3,10 @@ import { cn } from "@/lib/utils";
 export function Panel({
   children,
   className,
-}: {
+}: Readonly<{
   children: React.ReactNode;
   className?: string;
-}) {
+}>) {
   return (
     <section
       className={cn(

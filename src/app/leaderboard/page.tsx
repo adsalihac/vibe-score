@@ -79,7 +79,7 @@ async function loadLeaderboard(): Promise<LeaderboardReport> {
 
   return {
     bestHealth: [...latestEntries].sort((a, b) => b.health - a.health).slice(0, 10),
-    mostImproved: improvedEntries.sort((a, b) => (b.improvement ?? 0) - (a.improvement ?? 0)).slice(0, 10),
+    mostImproved: [...improvedEntries].sort((a, b) => (b.improvement ?? 0) - (a.improvement ?? 0)).slice(0, 10),
     lowestDependencyRisk: [...latestEntries].sort((a, b) => b.dependencyRisk - a.dependencyRisk).slice(0, 10),
     bestDocs: [...latestEntries].sort((a, b) => b.documentation - a.documentation).slice(0, 10),
   };
@@ -89,11 +89,11 @@ function LeaderboardTable({
   title,
   metric,
   entries,
-}: {
+}: Readonly<{
   title: string;
   metric: "health" | "improvement" | "dependencyRisk" | "documentation";
   entries: LeaderboardEntry[];
-}) {
+}>) {
   return (
     <section className="relative rounded-xl border border-[var(--border)] bg-[linear-gradient(180deg,var(--panel),var(--panel-2))] p-5 md:p-6">
       <h2 className="text-lg font-semibold uppercase">{title}</h2>
@@ -133,9 +133,9 @@ export default async function LeaderboardPage() {
       <div className="pointer-events-none absolute inset-0 grid-overlay" />
       <div className="pointer-events-none absolute left-[-8%] top-[-8%] h-72 w-72 rounded-full bg-[#33ff00]/15 blur-[120px]" />
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <section className="signal-frame relative overflow-hidden rounded-2xl p-6 md:p-10">
+        <section className="signal-frame relative overflow-hidden p-6 md:p-10">
           <p className="mono text-xs uppercase tracking-[0.22em] text-[#ffb000]">
-            Repository rankings
+            $ vibescore leaderboard --sort health
           </p>
           <div className="mt-5 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <div>
@@ -148,9 +148,9 @@ export default async function LeaderboardPage() {
             </div>
             <Link
               href="/"
-              className="inline-flex items-center justify-center rounded-full border border-[#33ff00]/70 bg-gradient-to-r from-[#1f521f] via-[#33ff00] to-[#ffb000] px-5 py-3 text-xs font-bold uppercase tracking-[0.14em] text-black transition hover:brightness-110"
+              className="inline-flex items-center justify-center border border-[var(--accent-primary)] bg-transparent px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent-primary)] transition hover:bg-[var(--accent-primary)] hover:text-[var(--background)]"
             >
-              Scan A Repo
+              [ Scan Repo ]
             </Link>
           </div>
         </section>

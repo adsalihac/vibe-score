@@ -64,9 +64,9 @@ function toHistory(item: {
 
 export default async function RepoProfilePage({
   params,
-}: {
+}: Readonly<{
   params: Promise<{ owner: string; repo: string }>;
-}) {
+}>) {
   const { owner, repo } = await params;
   const repoFullName = `${decodeURIComponent(owner)}/${decodeURIComponent(repo)}`;
 
@@ -93,10 +93,10 @@ export default async function RepoProfilePage({
       <div className="pointer-events-none absolute inset-0 grid-overlay" />
       <div className="pointer-events-none absolute left-[-8%] top-[-8%] h-72 w-72 rounded-full bg-[#33ff00]/15 blur-[120px]" />
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
-        <section className="signal-frame relative overflow-hidden rounded-2xl p-6 md:p-10">
+        <section className="signal-frame relative overflow-hidden p-6 md:p-10">
           <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#33ff00]/60 to-transparent" />
           <p className="mono text-xs uppercase tracking-[0.22em] text-[#ffb000]">
-            Public repository profile
+            $ vibescore profile --public
           </p>
           <div className="mt-5 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <div>
@@ -109,21 +109,14 @@ export default async function RepoProfilePage({
             </div>
             <Link
               href={`/?repo=https://github.com/${repoFullName}`}
-              className="inline-flex items-center justify-center rounded-full border border-[#33ff00]/70 bg-gradient-to-r from-[#1f521f] via-[#33ff00] to-[#ffb000] px-5 py-3 text-xs font-bold uppercase tracking-[0.14em] text-black transition hover:brightness-110"
+              className="inline-flex items-center justify-center border border-[var(--accent-primary)] bg-transparent px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-[var(--accent-primary)] transition hover:bg-[var(--accent-primary)] hover:text-[var(--background)]"
             >
-              Run New Scan
+              [ Run Scan ]
             </Link>
           </div>
         </section>
 
-        {!latest ? (
-          <section className="relative rounded-xl border border-[var(--border)] bg-[linear-gradient(180deg,var(--panel),var(--panel-2))] p-6">
-            <h2 className="text-xl font-semibold uppercase">No Public Scan Yet</h2>
-            <p className="mt-3 text-sm text-[var(--muted)]">
-              Run a scan for this repository first, then this profile will show health, missions, trend history, and the public badge.
-            </p>
-          </section>
-        ) : (
+        {latest ? (
           <>
             <section className="relative rounded-xl border border-[var(--border)] bg-[linear-gradient(180deg,var(--panel),var(--panel-2))] p-5 md:p-6">
               <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
@@ -216,6 +209,13 @@ export default async function RepoProfilePage({
               </div>
             </section>
           </>
+        ) : (
+          <section className="relative rounded-xl border border-[var(--border)] bg-[linear-gradient(180deg,var(--panel),var(--panel-2))] p-6">
+            <h2 className="text-xl font-semibold uppercase">No Public Scan Yet</h2>
+            <p className="mt-3 text-sm text-[var(--muted)]">
+              Run a scan for this repository first, then this profile will show health, missions, trend history, and the public badge.
+            </p>
+          </section>
         )}
       </div>
     </main>
