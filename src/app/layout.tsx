@@ -1,21 +1,22 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { JetBrains_Mono, VT323 } from "next/font/google";
 import "./globals.css";
 
-const headingFont = Space_Grotesk({
-  variable: "--font-heading",
+const displayFont = VT323({
+  variable: "--font-display",
   subsets: ["latin"],
-  display: "swap",
-});
-
-const bodyFont = Inter({
-  variable: "--font-body",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
+  weight: "400",
   display: "swap",
 });
 
 const monoFont = JetBrains_Mono({
+  variable: "--font-terminal",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  display: "swap",
+});
+
+const codeFont = JetBrains_Mono({
   variable: "--font-mono",
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
@@ -36,9 +37,9 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${headingFont.variable} ${bodyFont.variable} ${monoFont.variable} h-full antialiased`}
+      className={`${displayFont.variable} ${monoFont.variable} ${codeFont.variable} h-full`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col font-mono">{children}</body>
     </html>
   );
 }

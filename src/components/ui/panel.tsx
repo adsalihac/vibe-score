@@ -10,11 +10,14 @@ export function Panel({
   return (
     <section
       className={cn(
-        "relative overflow-hidden rounded-2xl border border-white/10 bg-[linear-gradient(180deg,rgba(15,17,21,0.96),rgba(8,9,12,0.98))] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05),0_0_0_1px_rgba(247,147,26,0.06),0_24px_50px_-20px_rgba(234,88,12,0.45)] backdrop-blur-lg transition-all duration-300 hover:-translate-y-0.5 hover:border-[#f7931a]/30 hover:shadow-[0_0_0_1px_rgba(247,147,26,0.15),0_30px_70px_-24px_rgba(247,147,26,0.4)] md:p-6",
+        "relative overflow-hidden rounded-none border border-[var(--border)] bg-[linear-gradient(180deg,rgba(13,18,13,0.98),rgba(10,15,10,1))] p-5 pt-10 shadow-[inset_0_0_0_1px_rgba(31,82,31,0.4),0_0_18px_rgba(51,255,0,0.08)] transition-colors duration-200 hover:border-[var(--accent-primary)] md:p-6 md:pt-11",
         className,
       )}
     >
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-[#f7931a]/60 to-transparent" />
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-7 border-b border-[var(--border)] bg-[rgba(10,10,10,0.85)]" />
+      <div className="pointer-events-none absolute left-3 top-2 text-[0.58rem] uppercase tracking-[0.16em] text-[var(--accent-secondary)]">
+        +-- pane --+
+      </div>
       {children}
     </section>
   );

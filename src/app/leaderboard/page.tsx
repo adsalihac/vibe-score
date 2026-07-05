@@ -7,9 +7,9 @@ export const dynamic = "force-dynamic";
 
 function statLabel(label: string, value: string | number) {
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-3 backdrop-blur-sm">
+    <div className="rounded-xl border border-[var(--border)] bg-[rgba(31,82,31,0.1)] p-3 backdrop-blur-sm">
       <p className="mono text-[0.65rem] uppercase tracking-[0.18em] text-[var(--muted)]">{label}</p>
-      <p className="mt-1 text-sm font-medium text-white">{value}</p>
+      <p className="mt-1 text-sm font-medium text-[var(--foreground)]">{value}</p>
     </div>
   );
 }
@@ -131,15 +131,15 @@ export default async function LeaderboardPage() {
   return (
     <main className="relative min-h-screen overflow-x-hidden px-4 py-10 md:px-10">
       <div className="pointer-events-none absolute inset-0 grid-overlay" />
-      <div className="pointer-events-none absolute left-[-8%] top-[-8%] h-72 w-72 rounded-full bg-[#f7931a]/15 blur-[120px]" />
+      <div className="pointer-events-none absolute left-[-8%] top-[-8%] h-72 w-72 rounded-full bg-[#33ff00]/15 blur-[120px]" />
       <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
         <section className="signal-frame relative overflow-hidden rounded-2xl p-6 md:p-10">
-          <p className="mono text-xs uppercase tracking-[0.22em] text-[#ffd600]">
+          <p className="mono text-xs uppercase tracking-[0.22em] text-[#ffb000]">
             Repository rankings
           </p>
           <div className="mt-5 flex flex-col gap-5 md:flex-row md:items-end md:justify-between">
             <div>
-              <h1 className="text-4xl font-bold leading-tight text-white sm:text-5xl md:text-7xl">
+              <h1 className="text-4xl font-bold leading-tight text-[var(--foreground)] sm:text-5xl md:text-7xl">
                 Repo Leaderboard
               </h1>
               <p className="mt-3 max-w-2xl text-base leading-relaxed text-[var(--muted)] md:text-lg">
@@ -148,7 +148,7 @@ export default async function LeaderboardPage() {
             </div>
             <Link
               href="/"
-              className="inline-flex items-center justify-center rounded-full border border-[#f7931a]/70 bg-gradient-to-r from-[#ea580c] via-[#f7931a] to-[#ffd600] px-5 py-3 text-xs font-bold uppercase tracking-[0.14em] text-black transition hover:brightness-110"
+              className="inline-flex items-center justify-center rounded-full border border-[#33ff00]/70 bg-gradient-to-r from-[#1f521f] via-[#33ff00] to-[#ffb000] px-5 py-3 text-xs font-bold uppercase tracking-[0.14em] text-black transition hover:brightness-110"
             >
               Scan A Repo
             </Link>
